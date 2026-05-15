@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 from agent.openrouter_client import OpenRouterClient
 from agent.task_queue import TaskQueue
-from agent.workflow_engine import WorkflowEngine, build_ai_development_workflow
+from agent.aider_integration import AiderIntegration
 
 # Orchestrator - Central coordinator for AI workers
 class Orchestrator:
@@ -17,29 +17,43 @@ class Orchestrator:
         self.repo_path = os.getenv("REPO_PATH", ".")
         # Initialize task queue
         self.task_queue = TaskQueue()
-        # Initialize workflow engine
-        self.workflow_engine = WorkflowEngine()
-        self._register_workflow_handlers()
+        # Initialize Aider for code editing
+        self.aider = AiderIntegration(repo_path=self.repo_path)
+        # Token accounting and memory persistence
+        from agent.memory_persistence import TokenAccounting, MemoryPersistence
+        self.accounting = TokenAccounting()
+        self.memory = MemoryPersistence()
     
-    def _register_workflow_handlers(self):
-        """Register handlers for workflow states"""
-        self.workflow_engine.register_state_handler("requirement_analysis", self._handle_requirement_analysis)
-        self.workflow_engine.register_state_handler("implementation_planning", self._handle_implementation_planning)
-        self.workflow_engine.register_state_handler("code_generation", self._handle_code_generation)
-        self.workflow_engine.register_state_handler("code_review", self._handle_code_review)
-        self.workflow_engine.register_state_handler("test_execution", self._handle_test_execution)
-        self.workflow_engine.register_state_handler("commit_and_push", self._handle_commit_and_push)
-    
-    def plan_task(self, task_description: str) -> Dict[str, Any]:
+    def plan_task(self, task_description: str) -> List[Dict[str, Any]]:
         """Break down task into actionable steps"""
         steps = [
-            {"step": "analyze", "action": f"Analyze requirements for: {task_description}", "model": "simple"},
-            {"step": "plan", "action": "Create implementation plan", "model": "plan"},
-            {"step": "execute", "action": "Execute implementation", "model": "code"},
-            {"step": "test", "action": "Run tests", "model": "simple"},
-            {"step": "commit", "action": "Commit changes", "model": "simple"}
+            {
+                "step": "analyze",
+                "action": f"Analyze requirements for: {task_description}",
+                "model": "simple"
+            },
+            {
+                "step": "plan",
+                "action": "Create implementation plan",
+                "model": "plan"
+            },
+            {
+                "step": "code_generation",
+                "action": "Generate code based on plan",
+                "model": "code"
+            },
+            {
+                "step": "test",
+                "action": "Run tests",
+                "model": "simple"
+            },
+            {
+                "step": "commit",
+                "action": "Commit changes",
+                "model": "simple"
+            }
         ]
-        return {"steps": steps, "original_task": task_description}
+        return steps
     
     def route_to_model(self, step_type: str) -> str:
         """Always use OpenRouter/free model"""
@@ -76,9 +90,18 @@ class Orchestrator:
                 "timestamp": datetime.now().isoformat()
             }
         except subprocess.TimeoutExpired:
-            return {"step": step["step"], "status": "timeout", "timestamp": datetime.now().isoformat()}
+            return {
+                "step": step["step"],
+                "status": "timeout",
+                "timestamp": datetime.now().isoformat()
+            }
         except Exception as e:
-            return {"step": step["step"], "status": "failed", "error": str(e), "timestamp": datetime.now().isoformat()}
+            return {
+                "step": step["step"],
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
     
     def execute_commit_step(self, step: Dict) -> Dict[str, Any]:
         """Execute git commit step"""
@@ -90,43 +113,45 @@ class Orchestrator:
                 check=True,
                 capture_output=True
             )
-            return {"step": step["step"], "status": "completed", "timestamp": datetime.now().isoformat()}
+            return {
+                "step": step["step"],
+                "status": "completed",
+                "timestamp": datetime.now().isoformat()
+            }
         except Exception as e:
-            return {"step": step["step"], "status": "failed", "error": str(e), "timestamp": datetime.now().isoformat()}
+            return {
+                "step": step["step"],
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
     
-    def _handle_requirement_analysis(self, context: Dict):
-        """Handle requirement analysis state"""
-        task = context.get("task", "Unknown")
-        response = self.safe_api_call(f"Analyze requirements for: {task}")
-        context["requirement_analysis_result"] = response.get("response", "")
-    
-    def _handle_implementation_planning(self, context: Dict):
-        """Handle implementation planning state"""
-        analysis = context.get("requirement_analysis_result", "")
-        response = self.safe_api_call(f"Create implementation plan for: {analysis}")
-        context["implementation_plan_result"] = response.get("response", "")
-    
-    def _handle_code_generation(self, context: Dict):
-        """Handle code generation state"""
-        plan = context.get("implementation_plan_result", "")
-        response = self.safe_api_call(f"Generate code for: {plan}")
-        context["code_generation_result"] = response.get("response", "")
-    
-    def _handle_code_review(self, context: Dict):
-        """Handle code review state"""
-        code = context.get("code_generation_result", "")
-        response = self.safe_api_call(f"Review code: {code}")
-        context["code_review_result"] = response.get("response", "")
-    
-    def _handle_test_execution(self, context: Dict):
-        """Handle test execution state"""
-        result = self.execute_test_step({"step": "test", "action": "Run tests"})
-        context["test_execution_result"] = result
-    
-    def _handle_commit_and_push(self, context: Dict):
-        """Handle commit and push state"""
-        result = self.execute_commit_step({"step": "commit", "action": "Commit changes"})
-        context["commit_result"] = result
+    def execute_code_step(self, step: Dict) -> Dict[str, Any]:
+        """Execute code generation step using Aider"""
+        try:
+            # Generate code using OpenRouter, then apply via Aider
+            # First, get a plan from previous step or generate
+            prompt = step["action"]
+            # Use API to get more detailed implementation suggestion
+            api_result = self.safe_api_call(prompt, self.route_to_model("code"))
+            code_suggestion = api_result.get("response", "") if api_result.get("status") == "success" else prompt
+            
+            # Apply the code changes using Aider
+            success = self.aider.apply_prompt(code_suggestion)
+            return {
+                "step": step["step"],
+                "status": "completed" if success else "failed",
+                "timestamp": datetime.now().isoformat(),
+                "files_changed": self.aider.get_file_status() if success else [],
+                "code_suggestion": code_suggestion[:200] if success else None
+            }
+        except Exception as e:
+            return {
+                "step": step["step"],
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
     
     def execute_step(self, step: Dict) -> Dict[str, Any]:
         """Execute a single workflow step"""
@@ -134,35 +159,29 @@ class Orchestrator:
             return self.execute_test_step(step)
         elif step["step"] == "commit":
             return self.execute_commit_step(step)
-        elif step["step"] == "execute":
-            return self._handle_code_generation({})
-        
-        # Default: API call for analyze/plan
-        model = self.route_to_model(step["model"])
-        prompt = step["action"]
-        result = self.safe_api_call(prompt, model)
-        
-        return {
-            "step": step["step"],
-            "status": result.get("status", "unknown"),
-            "response": result.get("response", ""),
-            "error": result.get("error", ""),
-            "timestamp": datetime.now().isoformat()
-        }
+        elif step["step"] == "code_generation":
+            return self.execute_code_step(step)
+        else:
+            # Default: API call for analyze/plan
+            model = self.route_to_model(step["model"])
+            prompt = step["action"]
+            result = self.safe_api_call(prompt, model)
+            
+            return {
+                "step": step["step"],
+                "status": result.get("status", "unknown"),
+                "response": result.get("response", ""),
+                "error": result.get("error", ""),
+                "timestamp": datetime.now().isoformat()
+            }
     
     def execute_workflow(self, task: str) -> str:
-        """Run full workflow using workflow engine"""
-        # Start workflow engine
-        wf_def = build_ai_development_workflow()
-        self.workflow_engine.define_workflow("dev", wf_def)
-        instance_id = self.workflow_engine.start("dev", {"task": task})
-        
-        # Run through steps
+        """Run full workflow"""
         plan = self.plan_task(task)
         for step in plan["steps"]:
-            self.execute_step(step)
-        
-        return f"Completed workflow for: {task} (Instance: {instance_id})"
+            result = self.execute_step(step)
+            self.workflow_history.append(result)
+        return f"Completed workflow for: {task}"
     
     def query_memory(self, query: str) -> List[Dict]:
         """Query previous workflow history"""

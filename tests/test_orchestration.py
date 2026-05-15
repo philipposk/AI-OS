@@ -27,14 +27,13 @@ class TestOrchestration(unittest.TestCase):
     def test_plan_task_breakdown(self, mock_client):
         """Test task planning creates correct steps"""
         self.orch.client = mock_client.return_value
-        plan = self.orch.plan_task("Write a Python function")
+        steps = self.orch.plan_task("Write a Python function")
         
-        self.assertEqual(plan["original_task"], "Write a Python function")
-        self.assertEqual(len(plan["steps"]), 5)
+        self.assertEqual(len(steps), 5)
         
-        steps = [s["step"] for s in plan["steps"]]
-        expected = ["analyze", "plan", "execute", "test", "commit"]
-        self.assertEqual(steps, expected)
+        step_names = [s["step"] for s in steps]
+        expected = ["analyze", "plan", "code_generation", "test", "commit"]
+        self.assertEqual(step_names, expected)
     
     @patch('orchestration.OpenRouterClient')
     def test_safe_api_call_success(self, mock_client):
