@@ -1,0 +1,15 @@
+langgraph
+langchain
+chromadb
+sentence-transformers
+redis
+slack-sdk
+streamlit
+openrouter
+aider
+ollama
+llama-cpp-python
+
+pytest
+python-dotenv
+requests

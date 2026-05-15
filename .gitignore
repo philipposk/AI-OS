@@ -1,0 +1,9 @@
+__pycache__/
+data/
+*.pyc
+.env
+.env.local
+secrets/
+*.tfstate
+*.tfstate.backup
+.DS_Store
