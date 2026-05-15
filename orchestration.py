@@ -17,6 +17,8 @@ class Orchestrator:
         self.current_task = None
         self.workflow_history = []
         self.client = OpenRouterClient()
+        # Default model (can be overridden via UI or env)
+        self.selected_model = os.getenv("DEFAULT_MODEL", "openrouter/free")
         # Initialize Nvidia client if API key is available
         try:
             self.nvidia = NvidiaClient()
