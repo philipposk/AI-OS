@@ -178,7 +178,7 @@ class Orchestrator:
     def execute_workflow(self, task: str) -> str:
         """Run full workflow"""
         plan = self.plan_task(task)
-        for step in plan["steps"]:
+        for step in plan:
             result = self.execute_step(step)
             self.workflow_history.append(result)
         return f"Completed workflow for: {task}"
