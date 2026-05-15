@@ -1,6 +1,7 @@
 import unittest
 import os
 import tempfile
+import requests
 from unittest.mock import patch, MagicMock
 from orchestration import Orchestrator
 

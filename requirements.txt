@@ -13,6 +13,5 @@ llama-cpp-python
 pytest
 python-dotenv
 requests
-gstack-python
-ruflo-sdk
+
 pybase64

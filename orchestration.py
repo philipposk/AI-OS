@@ -4,9 +4,12 @@ import json
 import subprocess
 from datetime import datetime
 import requests
+import logging
+logger = logging.getLogger(__name__)
 from agent.openrouter_client import OpenRouterClient
 from agent.task_queue import TaskQueue
 from agent.aider_integration import AiderIntegration
+from agent.nvidia_client import NvidiaClient
 
 # Orchestrator - Central coordinator for AI workers
 class Orchestrator:
@@ -14,6 +17,12 @@ class Orchestrator:
         self.current_task = None
         self.workflow_history = []
         self.client = OpenRouterClient()
+        # Initialize Nvidia client if API key is available
+        try:
+            self.nvidia = NvidiaClient()
+        except Exception as e:
+            logger.warning(f"Nvidia client not initialized: {e}")
+            self.nvidia = None
         self.repo_path = os.getenv("REPO_PATH", ".")
         # Initialize task queue
         self.task_queue = TaskQueue()
