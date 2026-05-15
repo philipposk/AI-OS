@@ -44,16 +44,11 @@ class Orchestrator:
         return {"steps": steps, "original_task": task_description}
     
     def route_to_model(self, step_type: str) -> str:
-        """Select appropriate model for step"""
-        model_map = {
-            "plan": os.getenv("PLANNING_MODEL", "gpt-3.5-turbo"),
-            "code": os.getenv("CODE_MODEL", "gpt-4-turbo"),
-            "simple": os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
-        }
-        return model_map.get(step_type, "gpt-3.5-turbo")
+        """Always use OpenRouter/free model"""
+        return "openrouter/free"
     
     def execute_step(self, step: Dict) -> Dict[str, Any]:
-        """Execute a single workflow step by calling the appropriate model"""
+        """Execute a single workflow step by calling OpenRouter"""
         model = self.route_to_model(step["model"])
         prompt = step["action"]
         
@@ -85,7 +80,7 @@ class Orchestrator:
         """Run full workflow"""
         plan = self.plan_task(task)
         for step in plan["steps"]:
-            # Execute each step (would call actual models/tools in real implementation)
+            # Execute each step
             self.execute_step(step)
         return f"Completed workflow for: {task}"
     
@@ -94,7 +89,5 @@ class Orchestrator:
         return [h for h in self.workflow_history if query.lower() in str(h).lower()]
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
     orch = Orchestrator()
     print(orch.execute_workflow("Add dark mode to app"))
