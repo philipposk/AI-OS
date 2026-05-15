@@ -34,6 +34,8 @@ class Orchestrator:
         from agent.memory_persistence import TokenAccounting, MemoryPersistence
         self.accounting = TokenAccounting()
         self.memory = MemoryPersistence()
+        # expose method to change model
+        self.set_model = lambda model_id: setattr(self, 'selected_model', model_id)
     
     def plan_task(self, task_description: str) -> List[Dict[str, Any]]:
         """Break down task into actionable steps"""
@@ -67,8 +69,9 @@ class Orchestrator:
         return steps
     
     def route_to_model(self, step_type: str) -> str:
-        """Always use OpenRouter/free model"""
-        return "openrouter/free"
+        """Return model based on selected model or step type"""
+        # If a specific model is set, use it; otherwise fall back to free OpenRouter
+        return self.selected_model
     
     def safe_api_call(self, prompt: str, model: str = None) -> Dict[str, Any]:
         """Make API call with error handling"""
