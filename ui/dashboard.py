@@ -47,15 +47,29 @@ if st.button("Run Task") and task:
         usage = orch.accounting.report()
         st.write("**Token usage**")
         st.json(usage)
+        # Log activity for UI
+        orch.log_activity(f"Task '{task}' executed with model {selected_model}")
+        # Refresh in‑session log display
+        st.session_state.activity_log.append(f"Task '{task}' run with model {selected_model}")
 
-# Activity log (basic)
+# Activity log (persistent)
 st.header("Activity Log")
-log = []
+# Load persisted log from orchestrator if available
 if "activity_log" not in st.session_state:
-    st.session_state.activity_log = []
+    # Try to read from orchestrator's log file (if orchestrator exists)
+    try:
+        with open(orch.activity_log_path, "r", encoding="utf-8") as f:
+            lines = [line.strip().split(' - ', 1)[1] for line in f.readlines() if ' - ' in line]
+            st.session_state.activity_log = lines
+    except Exception:
+        st.session_state.activity_log = []
+# Show log entries
 for entry in st.session_state.activity_log:
     st.write(f"- {entry}")
 
-# Append new entry after run
-if st.button("Add Log Entry"):
-    st.session_state.activity_log.append(f"Task '{task}' run with model {selected_model}")
+# Add a manual entry (optional)
+if st.button("Add Manual Log Entry"):
+    manual = st.text_input("Log message:")
+    if manual:
+        orch.log_activity(manual)
+        st.session_state.activity_log.append(manual)
