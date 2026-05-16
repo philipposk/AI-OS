@@ -12,7 +12,7 @@ aider==0.2.6
 ollama==0.6.2
 llama-cpp-python==0.3.23
 
-pytest
+pytest==7.1.2
 python-dotenv
 requests
 
