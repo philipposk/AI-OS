@@ -25,6 +25,8 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Nvidia client not initialized: {e}")
             self.nvidia = None
+        # expose method to change model globally
+        self.set_model = lambda model_id: setattr(self, 'selected_model', model_id)
         self.repo_path = os.getenv("REPO_PATH", ".")
         # Initialize task queue
         self.task_queue = TaskQueue()
@@ -46,8 +48,7 @@ class Orchestrator:
         except Exception as e:
             # Non‑critical – keep silent
             pass
-        # expose method to change model
-        self.set_model = lambda model_id: setattr(self, 'selected_model', model_id)
+
     
     def plan_task(self, task_description: str) -> List[Dict[str, Any]]:
         """Break down task into actionable steps"""
