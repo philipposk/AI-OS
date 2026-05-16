@@ -19,6 +19,8 @@ class Orchestrator:
         self.client = OpenRouterClient()
         # Default model (can be overridden via UI or env)
         self.selected_model = os.getenv("DEFAULT_MODEL", "openrouter/free")
+        # Per‑step model overrides (filled via UI later)
+        self.step_models: Dict[str, str] = {}
         # Initialize Nvidia client if API key is available
         try:
             self.nvidia = NvidiaClient()
@@ -88,10 +90,13 @@ class Orchestrator:
         - For code generation we prefer the Nvidia NIM model if the client is available.
         - All other steps fall back to the globally selected model.
         """
+        # Check for per‑step overrides first
+        if step_type in self.step_models:
+            return self.step_models[step_type]
+        # Fallback: Nvidia for code generation if client available
         if step_type == "code" and self.nvidia:
-            # Use a representative Nvidia NIM model
             return "nvidia-nim/deepseek-v4-flash"
-        # Default – use the globally selected model (openrouter/free or any UI choice)
+        # Default – use the globally selected model
         return self.selected_model
     
     def safe_api_call(self, prompt: str, model: str = None) -> Dict[str, Any]:
