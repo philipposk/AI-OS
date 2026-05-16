@@ -34,6 +34,18 @@ class Orchestrator:
         from agent.memory_persistence import TokenAccounting, MemoryPersistence
         self.accounting = TokenAccounting()
         self.memory = MemoryPersistence()
+        # Activity logger – writes simple messages to ./data/activity.log
+        self.activity_log_path = os.path.join(self.memory.persist_dir, "activity.log")
+        # Ensure the file exists
+        open(self.activity_log_path, "a").close()
+    def log_activity(self, message: str):
+        """Append a human‑readable activity line to the log file."""
+        try:
+            with open(self.activity_log_path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat()} - {message}\n")
+        except Exception as e:
+            # Non‑critical – keep silent
+            pass
         # expose method to change model
         self.set_model = lambda model_id: setattr(self, 'selected_model', model_id)
     
