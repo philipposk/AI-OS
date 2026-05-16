@@ -237,4 +237,8 @@ class Orchestrator:
 
 if __name__ == "__main__":
     orch = Orchestrator()
-    print(orch.execute_workflow("Add dark mode to app"))
+    result = orch.execute_workflow("Add dark mode to app")
+    print(result)
+    # Example billing call (user_id placeholder)
+    from billing import report_and_charge
+    report_and_charge("demo_user", orch.accounting)
