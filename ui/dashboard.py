@@ -1,7 +1,7 @@
 # Web UI Dashboard - Browser-based interface
 import streamlit as st
 import json
-from ai_company.orchestration import Orchestrator
+from orchestration import Orchestrator
 
 st.title("GStack AI Company Dashboard")
 
