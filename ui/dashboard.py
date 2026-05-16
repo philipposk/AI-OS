@@ -11,6 +11,8 @@ if "orch" not in st.session_state:
 orch = st.session_state.orch
 
 # Sidebar: worker status
+if orch.nvidia is None:
+    st.sidebar.warning("NVIDIA client not available – check NVCF_API_KEY environment variable.")
 st.sidebar.title("AI Workers")
 worker_status = {
     "orchestrator": "running",
