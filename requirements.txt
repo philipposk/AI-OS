@@ -5,6 +5,7 @@ sentence-transformers
 redis
 slack-sdk
 streamlit
+blinker
 openrouter
 aider
 ollama
