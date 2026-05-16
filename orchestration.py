@@ -81,8 +81,16 @@ class Orchestrator:
         return steps
     
     def route_to_model(self, step_type: str) -> str:
-        """Return model based on selected model or step type"""
-        # If a specific model is set, use it; otherwise fall back to free OpenRouter
+        """Return model based on selected model or step type.
+        
+        - ``step_type`` comes from the ``model`` field of a step (e.g. "simple", "plan", "code").
+        - For code generation we prefer the Nvidia NIM model if the client is available.
+        - All other steps fall back to the globally selected model.
+        """
+        if step_type == "code" and self.nvidia:
+            # Use a representative Nvidia NIM model
+            return "nvidia-nim/deepseek-v4-flash"
+        # Default – use the globally selected model (openrouter/free or any UI choice)
         return self.selected_model
     
     def safe_api_call(self, prompt: str, model: str = None) -> Dict[str, Any]:
@@ -207,6 +215,12 @@ class Orchestrator:
         for step in plan:
             result = self.execute_step(step)
             self.workflow_history.append(result)
+            # Persist each step result to memory for later queries
+            try:
+                import json as _json
+                self.memory.add_document(_json.dumps(result), {"type": "workflow_step", "task": task, "step": step.get("step")})
+            except Exception:
+                pass
         return f"Completed workflow for: {task}"
     
     def query_memory(self, query: str) -> List[Dict]:
