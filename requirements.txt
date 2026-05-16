@@ -1,4 +1,4 @@
-langgraph
+langgraph==0.0.28
 langchain
 chromadb
 sentence-transformers
