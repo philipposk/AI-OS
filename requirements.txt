@@ -5,6 +5,7 @@ sentence-transformers
 redis
 slack-sdk
 streamlit
+starlette>=0.40.0
 blinker
 openrouter
 aider
