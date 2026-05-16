@@ -33,17 +33,32 @@ worker_status = {
 for worker, status in worker_status.items():
     st.sidebar.write(f"{worker}: {status}")
 
-# Model selection
-st.sidebar.subheader("Model Selection")
+# Model selection (global)
+st.sidebar.subheader("Global Model Selection")
 model_options = [
     "openrouter/free",
     "nvidia-nim/deepseek-v4-flash",
     "openai/gpt-4o-mini",
     "groq/llama-3.1-70b"
 ]
-selected_model = st.sidebar.selectbox("Choose model", model_options, index=0)
-# Apply selection
-orch.set_model(selected_model)
+global_model = st.sidebar.selectbox("Default model", model_options, index=0)
+orch.set_model(global_model)
+
+# Per‑step model overrides
+st.sidebar.subheader("Step‑Specific Model Overrides")
+step_names = ["analyze", "plan", "code", "test", "commit"]
+# Initialize session state for step overrides if not present
+if "step_models" not in st.session_state:
+    st.session_state.step_models = {step: "" for step in step_names}
+for step in step_names:
+    chosen = st.sidebar.selectbox(f"{step} model", ["(default)"] + model_options, index=0, key=f"override_{step}")
+    if chosen == "(default)":
+        st.session_state.step_models[step] = ""
+    else:
+        st.session_state.step_models[step] = chosen
+# Apply per‑step overrides to orchestrator
+orch.step_models = st.session_state.step_models
+
 
 # Main: Task input
 st.header("Current Task")
@@ -64,20 +79,22 @@ if st.button("Run Task") and task:
 
 # Activity log (persistent)
 st.header("Activity Log")
-# Load persisted log from orchestrator if available
+# Search filter
+search_term = st.text_input("Search log", "")
+# Load persisted log from orchestrator if needed
 if "activity_log" not in st.session_state:
-    # Try to read from orchestrator's log file (if orchestrator exists)
     try:
         with open(orch.activity_log_path, "r", encoding="utf-8") as f:
             lines = [line.strip().split(' - ', 1)[1] for line in f.readlines() if ' - ' in line]
             st.session_state.activity_log = lines
     except Exception:
         st.session_state.activity_log = []
-# Show log entries
-for entry in st.session_state.activity_log:
+# Filter and display
+filtered = [e for e in st.session_state.activity_log if search_term.lower() in e.lower()]
+for entry in filtered:
     st.write(f"- {entry}")
 
-# Add a manual entry (optional)
+# Manual entry
 if st.button("Add Manual Log Entry"):
     manual = st.text_input("Log message:")
     if manual:
