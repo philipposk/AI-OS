@@ -3,7 +3,17 @@ import streamlit as st
 import json
 from orchestration import Orchestrator
 
+st.set_page_config(page_title="GStack Dashboard", layout="wide")
 st.title("GStack AI Company Dashboard")
+# Dark‑mode toggle
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+dark = st.sidebar.checkbox("Dark mode", value=False)
+st.session_state.dark_mode = dark
+if dark:
+    st.markdown("""<style>body {background-color:#111;color:#eee;}</style>""", unsafe_allow_html=True)
+else:
+    st.markdown("""<style>body {background-color:#fff;color:#111;}</style>""", unsafe_allow_html=True)
 
 # Initialize orchestrator (single instance per session)
 if "orch" not in st.session_state:
