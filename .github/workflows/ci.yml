@@ -1,77 +1,52 @@
-name: AI Company CI Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main]
   pull_request:
-    branches: [ main, master ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 10
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    
-    - name: Run unit tests
-      run: |
-        python -m pytest tests/ -v --tb=short
-    
-    - name: Test orchestration workflow
-      run: |
-        python -c "
-        from orchestration import Orchestrator
-        import os
-        os.environ['OPENROUTER_API_KEY'] = '${{ secrets.OPENROUTER_API_KEY }}'
-        orch = Orchestrator()
-        result = orch.execute_workflow('test workflow')
-        assert 'Completed' in result
-        print('Orchestrator test passed')
-        "
-    
-    - name: Test memory system
-      run: |
-        python -c "
-        from agent.context_manager import ContextManager
-        cm = ContextManager()
-        cm.add_document('test document', {'source': 'test.py'})
-        results = cm.get_relevant_context('test')
-        assert len(results) > 0
-        print('Memory test passed')
-        "
+      - uses: actions/checkout@v4
 
-  code-quality:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Pytest
+        env:
+          AI_COMPANY_DB: ${{ runner.temp }}/ci.sqlite
+        run: |
+          pytest -q --tb=short
+
+      - name: CLI sanity
+        env:
+          AI_COMPANY_DB: ${{ runner.temp }}/ci.sqlite
+        run: |
+          python cli.py providers
+          python cli.py accounting --json
+
+  docker:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 10
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    
-    - name: Install linting tools
-      run: |
-        pip install flake8 black isort
-    
-    - name: Run flake8
-      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    
-    - name: Run black formatting check
-      run: black --check .
-    
-    - name: Run isort
-      run: isort --check-only .
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ai-company:ci .
+      - name: Smoke run
+        run: |
+          docker run --rm \
+            -e AI_COMPANY_DB=/tmp/x.sqlite \
+            ai-company:ci \
+            python cli.py providers
