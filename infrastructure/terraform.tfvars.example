@@ -1,0 +1,20 @@
+tenancy_ocid        = "ocid1.tenancy.oc1..xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+user_ocid           = "ocid1.user.oc1..xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+fingerprint         = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path    = "~/.oci/oci_api_key.pem"
+region              = "eu-frankfurt-1"
+compartment_id      = "ocid1.compartment.oc1..xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Always-Free Ampere A1 Flex
+instance_shape      = "VM.Standard.A1.Flex"
+instance_ocpus      = 4
+instance_memory_gbs = 24
+
+block_volume_size_gbs    = 100
+
+# Keep this false; tunnel Streamlit via SSH instead of opening 8501 to the world.
+expose_streamlit_publicly = false
+
+repo_url    = "https://github.com/philipposk/AI-OS.git"
+repo_branch = "main"

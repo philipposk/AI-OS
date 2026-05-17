@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    image: ai-company:dev
+    container_name: ai-company
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      AI_COMPANY_DB: /app/data/ai_company.sqlite
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - ollama
+
+  # Optional local LLM provider. Disable by setting `profiles: [no-ollama]` or removing the service.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-company-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    # GPU? Add deploy.resources.reservations.devices for NVIDIA + nvidia-container-toolkit.
+
+volumes:
+  ollama:
