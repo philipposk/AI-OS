@@ -12,6 +12,7 @@ from langgraph.types import Command
 
 from router.base import ChatResult
 import orchestrator.nodes as nodes_mod
+import tools.file_editor as file_editor_mod
 import tools.git_ops as git_ops_mod
 
 
@@ -23,6 +24,9 @@ class StubRouter:
         self.plan_payload = [
             {"title": "Add --version flag", "detail": "Wire argparse --version", "files": ["cli.py"]},
         ]
+        self.code_payload = {
+            "changes": [{"path": "cli.py", "content": "# patched by stub\n"}]
+        }
 
     def chat(self, messages, task_type="simple", model=None, max_tokens=1024, temperature=0.7, workflow_id=None):
         self.calls.append((task_type, model, len(messages)))
@@ -30,6 +34,8 @@ class StubRouter:
             text = "Task wants a --version flag on cli.py. Risk: low."
         elif task_type == "plan":
             text = json.dumps(self.plan_payload)
+        elif task_type == "code":
+            text = json.dumps(self.code_payload)
         elif task_type == "review":
             text = "Added --version flag. cli.py touched. Tests passed."
         else:
@@ -38,9 +44,13 @@ class StubRouter:
 
 
 @pytest.fixture(autouse=True)
-def stub_router(monkeypatch):
+def stub_router(monkeypatch, tmp_path):
     sr = StubRouter()
     monkeypatch.setattr(nodes_mod, "_router", sr)
+    monkeypatch.setattr(file_editor_mod, "_router", sr)
+    # Sandbox the file editor's working tree so tests don't scribble on the repo.
+    monkeypatch.setattr(file_editor_mod, "WORKING_TREE", tmp_path)
+    (tmp_path / "cli.py").write_text("# original\n", encoding="utf-8")
     return sr
 
 
