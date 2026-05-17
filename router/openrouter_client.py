@@ -7,6 +7,7 @@ from typing import List
 import requests
 
 from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
+from .openrouter_free import ROTATE_SENTINELS
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class OpenRouterClient(BaseProvider):
     def default_model(self) -> str:
         return os.getenv("ROUTER_OPENROUTER_DEFAULT", "meta-llama/llama-3.2-3b-instruct:free")
 
-    def chat(
+    def _chat_one(
         self,
         messages: List[Message],
         model: str,
@@ -60,3 +61,15 @@ class OpenRouterClient(BaseProvider):
             completion_tokens=int(usage.get("completion_tokens", 0)),
             raw=body,
         )
+
+    def chat(
+        self,
+        messages: List[Message],
+        model: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+    ) -> ChatResult:
+        if model in ROTATE_SENTINELS:
+            from .openrouter_free import chat_rotate
+            return chat_rotate(self, messages, max_tokens=max_tokens, temperature=temperature)
+        return self._chat_one(messages, model, max_tokens=max_tokens, temperature=temperature)

@@ -192,6 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
     msearch.add_argument("--limit", type=int, default=5)
     msub.add_parser("count", help="Count documents")
     m.set_defaults(func=cmd_memory)
+
+    fr = sub.add_parser("free-models", help="OpenRouter free model list / rotation")
+    frsub = fr.add_subparsers(dest="free_cmd", required=True)
+    frsub.add_parser("list", help="Show cached free model list")
+    frsub.add_parser("refresh", help="Force-refresh from OpenRouter /models")
+    fr.set_defaults(func=lambda a: __import__("router.openrouter_free", fromlist=["main"]).main([a.free_cmd]))
     return p
 
 
