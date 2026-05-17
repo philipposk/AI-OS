@@ -85,8 +85,7 @@ def test_resolve_no_provider_available_raises():
 
 
 def test_chat_records_to_ledger(tmp_path, monkeypatch):
-    ledger = tmp_path / "ledger.jsonl"
-    monkeypatch.setenv("AI_COMPANY_ACCOUNTING_LOG", str(ledger))
+    monkeypatch.setenv("AI_COMPANY_DB", str(tmp_path / "ledger.sqlite"))
     fp = FakeProvider("anthropic", available=True, default="claude-haiku-4-5")
     router = _router(anthropic=fp)
     res = router.chat(
@@ -98,17 +97,18 @@ def test_chat_records_to_ledger(tmp_path, monkeypatch):
     )
     assert res.text == "reply from anthropic"
     assert fp.calls and fp.calls[0][1] == "claude-haiku-4-5"
-    lines = ledger.read_text().strip().splitlines()
-    assert len(lines) == 1
-    import json
-    rec = json.loads(lines[0])
-    assert rec["provider"] == "anthropic"
-    assert rec["model"] == "claude-haiku-4-5"
-    assert rec["prompt_tokens"] == 10
-    assert rec["completion_tokens"] == 20
-    assert rec["task_type"] == "plan"
+    from storage.accounting import iter_entries
+
+    entries = list(iter_entries())
+    assert len(entries) == 1
+    e = entries[0]
+    assert e.provider == "anthropic"
+    assert e.model == "claude-haiku-4-5"
+    assert e.prompt_tokens == 10
+    assert e.completion_tokens == 20
+    assert e.task_type == "plan"
     # Haiku pricing: 10 in @ $1/MTok + 20 out @ $5/MTok
-    assert rec["cost_usd"] == pytest.approx((10 / 1e6) * 1.0 + (20 / 1e6) * 5.0)
+    assert e.cost_usd == pytest.approx((10 / 1e6) * 1.0 + (20 / 1e6) * 5.0)
 
 
 def test_cost_estimate_free_model_is_zero():

@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from router import ModelRouter
 from router.base import Message
+from storage import memory as memory_store
 
 from .state import CodeChange, GraphState, PlanStep, TestResult
 
@@ -33,12 +34,32 @@ def _chat(task_type: str, system: str, user: str, *, workflow_id: str | None = N
 def analyze_node(state: GraphState) -> Dict[str, Any]:
     task = state["task"]
     wf = state.get("workflow_id")
+    # Pull any prior-workflow memory that might be relevant.
+    try:
+        related = memory_store.search(task, limit=3)
+    except Exception as e:  # storage hiccup shouldn't kill the workflow
+        logger.warning("memory.search failed: %s", e)
+        related = []
+    extra = ""
+    if related:
+        extra = "\n\nRelated past notes (most relevant first):\n" + "\n---\n".join(
+            d.text[:600] for d in related
+        )
     system = (
         "You are a senior engineer breaking down an incoming task. In <=120 words, "
         "describe what the user is trying to accomplish, the likely files/areas involved, "
         "and the most important risks or unknowns. Be specific."
     )
-    analysis = _chat("analyze", system, f"Task: {task}", workflow_id=wf)
+    analysis = _chat("analyze", system, f"Task: {task}{extra}", workflow_id=wf)
+    try:
+        memory_store.add(
+            f"TASK: {task}\nANALYSIS: {analysis}",
+            kind="analysis",
+            workflow_id=wf,
+            meta={"task": task},
+        )
+    except Exception as e:
+        logger.warning("memory.add(analysis) failed: %s", e)
     return {"analysis": analysis, "retries": 0}
 
 
@@ -145,6 +166,15 @@ def review_node(state: GraphState) -> Dict[str, Any]:
         "No emoji, no marketing tone."
     )
     summary = _chat("review", system, summary_input, workflow_id=wf)
+    try:
+        memory_store.add(
+            f"TASK: {state.get('task')}\nSUMMARY: {summary}",
+            kind="review",
+            workflow_id=wf,
+            meta={"files": sorted({c.get('path', '') for c in state.get('code_changes', [])})},
+        )
+    except Exception as e:
+        logger.warning("memory.add(review) failed: %s", e)
     return {"review_summary": summary}
 
 

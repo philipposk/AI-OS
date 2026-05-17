@@ -1,27 +1,37 @@
-"""Token + cost ledger.
+"""Token + cost ledger backed by SQLite.
 
-Phase B impl: append JSON lines to data/accounting.jsonl. Phase E swaps to sqlite.
-Interface kept stable so the swap is mechanical.
+Public API (stable across Phase B → E swap):
+    record(...) -> LedgerEntry
+    iter_entries() -> Iterable[LedgerEntry]
+    report() -> dict
 """
 from __future__ import annotations
 
 import json
-import os
-import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from router.costs import estimate_cost_usd
 
-_LOCK = threading.Lock()
+from .db import connect
 
-
-def _ledger_path() -> Path:
-    p = Path(os.getenv("AI_COMPANY_ACCOUNTING_LOG", "./data/accounting.jsonl"))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    prompt_tokens INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    cost_usd REAL NOT NULL,
+    workflow_id TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_ledger_provider ON ledger(provider);
+CREATE INDEX IF NOT EXISTS ix_ledger_workflow ON ledger(workflow_id);
+CREATE INDEX IF NOT EXISTS ix_ledger_ts ON ledger(ts);
+"""
 
 
 @dataclass
@@ -33,7 +43,11 @@ class LedgerEntry:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float
-    workflow_id: str | None = None
+    workflow_id: Optional[str] = None
+
+
+def _ensure(conn) -> None:
+    conn.executescript(_SCHEMA)
 
 
 def record(
@@ -43,7 +57,7 @@ def record(
     prompt_tokens: int,
     completion_tokens: int,
     task_type: str = "unknown",
-    workflow_id: str | None = None,
+    workflow_id: Optional[str] = None,
 ) -> LedgerEntry:
     entry = LedgerEntry(
         ts=datetime.now(timezone.utc).isoformat(),
@@ -55,30 +69,54 @@ def record(
         cost_usd=estimate_cost_usd(model, prompt_tokens, completion_tokens),
         workflow_id=workflow_id,
     )
-    with _LOCK, _ledger_path().open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(entry)) + "\n")
+    with connect() as conn:
+        _ensure(conn)
+        conn.execute(
+            "INSERT INTO ledger (ts, provider, model, task_type, prompt_tokens, completion_tokens, cost_usd, workflow_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                entry.ts,
+                entry.provider,
+                entry.model,
+                entry.task_type,
+                entry.prompt_tokens,
+                entry.completion_tokens,
+                entry.cost_usd,
+                entry.workflow_id,
+            ),
+        )
     return entry
 
 
-def iter_entries() -> Iterable[LedgerEntry]:
-    p = _ledger_path()
-    if not p.exists():
-        return
-    with p.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            yield LedgerEntry(**json.loads(line))
+def iter_entries(workflow_id: Optional[str] = None) -> Iterable[LedgerEntry]:
+    with connect() as conn:
+        _ensure(conn)
+        if workflow_id:
+            rows = conn.execute(
+                "SELECT * FROM ledger WHERE workflow_id=? ORDER BY id ASC", (workflow_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM ledger ORDER BY id ASC").fetchall()
+        for r in rows:
+            yield LedgerEntry(
+                ts=r["ts"],
+                provider=r["provider"],
+                model=r["model"],
+                task_type=r["task_type"],
+                prompt_tokens=r["prompt_tokens"],
+                completion_tokens=r["completion_tokens"],
+                cost_usd=r["cost_usd"],
+                workflow_id=r["workflow_id"],
+            )
 
 
-def report() -> dict:
+def report(workflow_id: Optional[str] = None) -> dict:
     by_provider: dict[str, dict] = {}
     total_cost = 0.0
     total_calls = 0
     total_in = 0
     total_out = 0
-    for e in iter_entries():
+    for e in iter_entries(workflow_id):
         b = by_provider.setdefault(
             e.provider, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
         )

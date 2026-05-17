@@ -17,6 +17,8 @@ from orchestrator import build_graph, new_workflow_id
 from langgraph.types import Command
 
 from router import ModelRouter
+from storage import memory as memory_store
+from storage import queue as task_queue
 from storage.accounting import report
 
 
@@ -117,6 +119,43 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_queue(args: argparse.Namespace) -> int:
+    if args.queue_cmd == "push":
+        t = task_queue.push(args.task, priority=args.priority)
+        print(f"queued #{t.id} priority={t.priority}: {t.task!r}")
+        return 0
+    if args.queue_cmd == "list":
+        for t in task_queue.list_tasks(status=args.status, limit=args.limit):
+            print(f"#{t.id:<4d} [{t.status:11s}] prio={t.priority} {t.task[:80]}")
+        return 0
+    if args.queue_cmd == "status":
+        counts = task_queue.status_counts()
+        for k, v in counts.items():
+            print(f"  {k:11s} {v}")
+        return 0
+    if args.queue_cmd == "cancel":
+        task_queue.cancel(args.id)
+        print(f"cancelled #{args.id}")
+        return 0
+    return 2
+
+
+def cmd_memory(args: argparse.Namespace) -> int:
+    if args.memory_cmd == "search":
+        hits = memory_store.search(args.query, kind=args.kind, limit=args.limit)
+        if not hits:
+            print("(no matches)")
+        for h in hits:
+            score = f"{h.score:.2f}" if h.score is not None else "—"
+            print(f"#{h.id} kind={h.kind} wf={h.workflow_id} score={score}")
+            print(f"  {h.text[:300]}")
+        return 0
+    if args.memory_cmd == "count":
+        print(memory_store.count())
+        return 0
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ai_company", description="AI orchestrator CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -131,6 +170,28 @@ def build_parser() -> argparse.ArgumentParser:
     acc.add_argument("--json", action="store_true")
     acc.set_defaults(func=cmd_accounting)
     sub.add_parser("check", help="Sanity-check the install").set_defaults(func=cmd_check)
+
+    q = sub.add_parser("queue", help="Task queue ops")
+    qsub = q.add_subparsers(dest="queue_cmd", required=True)
+    qpush = qsub.add_parser("push", help="Queue a task")
+    qpush.add_argument("task")
+    qpush.add_argument("--priority", type=int, default=0)
+    qlist = qsub.add_parser("list", help="List tasks")
+    qlist.add_argument("--status", help="pending|in_progress|done|failed|cancelled")
+    qlist.add_argument("--limit", type=int, default=20)
+    qsub.add_parser("status", help="Show counts by status")
+    qcancel = qsub.add_parser("cancel", help="Cancel a task")
+    qcancel.add_argument("id", type=int)
+    q.set_defaults(func=cmd_queue)
+
+    m = sub.add_parser("memory", help="Memory store ops")
+    msub = m.add_subparsers(dest="memory_cmd", required=True)
+    msearch = msub.add_parser("search", help="FTS5 search over stored notes")
+    msearch.add_argument("query")
+    msearch.add_argument("--kind", help="analysis|review|note|...")
+    msearch.add_argument("--limit", type=int, default=5)
+    msub.add_parser("count", help="Count documents")
+    m.set_defaults(func=cmd_memory)
     return p
 
 
