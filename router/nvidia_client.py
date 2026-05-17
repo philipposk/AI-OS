@@ -1,83 +1,61 @@
-import os
-import json
-import logging
-import requests
-from typing import List, Dict
+from __future__ import annotations
 
-logging.basicConfig(level=logging.INFO)
+import logging
+import os
+from typing import List
+
+import requests
+
+from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
+
 logger = logging.getLogger(__name__)
 
 
-class NvidiaClient:
-    """
-    Client for Nvidia NIM API.
-    Uses the Nvidia Inference Microservices endpoint to run models.
-    """
+class NvidiaClient(BaseProvider):
+    name = "nvidia"
+    BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-    def __init__(self):
-        self.api_key = os.getenv("NVCF_API_KEY")
-        if not self.api_key:
-            raise ValueError("NVCF_API_KEY environment variable is required")
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.getenv("NVCF_API_KEY")
 
-        # Nvidia chat completions endpoint (free tier)
-        self.base_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    def is_available(self) -> bool:
+        return bool(self.api_key)
 
-    def _make_request(self, model: str, messages: List[Dict]) -> Dict:
+    def default_model(self) -> str:
+        return os.getenv("ROUTER_NVIDIA_DEFAULT", "meta/llama-3.1-8b-instruct")
+
+    def chat(
+        self,
+        messages: List[Message],
+        model: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+    ) -> ChatResult:
+        if not self.is_available():
+            raise ProviderUnavailable("NVCF_API_KEY not set")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         payload = {
             "model": model,
             "messages": messages,
-            "max_tokens": 1000,
-            "temperature": 0.7,
-            "top_p": 0.95
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": 0.95,
         }
-
-        try:
-            response = requests.post(
-                self.base_url,
-                headers=headers,
-                json=payload,
-                timeout=60
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Nvidia API request failed: {e}")
-            raise
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON response from Nvidia API")
-            raise
-
-    def chat(self, messages: List[Dict], model: str = "meta/llama-3.1-8b-instruct") -> str:
-        """
-        Send a chat request to Nvidia NIM.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model name (default: free-tier Llama 3.1 8B)
-
-        Returns:
-            The content of the final assistant message
-        """
-        try:
-            response = self._make_request(model, messages)
-            choices = response.get("choices", [])
-            if not choices:
-                raise ValueError("No choices in Nvidia API response")
-            return choices[0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"Error in Nvidia chat: {e}")
-            raise
-
-
-if __name__ == "__main__":
-    client = NvidiaClient()
-    messages = [{"role": "user", "content": "Hello! How are you?"}]
-    try:
-        response = client.chat(messages)
-        print("Response:", response)
-    except Exception as e:
-        print(f"Error: {e}")
+        resp = requests.post(self.BASE_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        body = resp.json()
+        choices = body.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"NVIDIA returned no choices: {body!r}")
+        usage = body.get("usage") or {}
+        return ChatResult(
+            text=choices[0]["message"]["content"],
+            model=body.get("model", model),
+            provider=self.name,
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            raw=body,
+        )

@@ -11,18 +11,18 @@ from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
 logger = logging.getLogger(__name__)
 
 
-class OpenRouterClient(BaseProvider):
-    name = "openrouter"
-    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+class GroqClient(BaseProvider):
+    name = "groq"
+    BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
 
     def is_available(self) -> bool:
         return bool(self.api_key)
 
     def default_model(self) -> str:
-        return os.getenv("ROUTER_OPENROUTER_DEFAULT", "meta-llama/llama-3.2-3b-instruct:free")
+        return os.getenv("ROUTER_GROQ_DEFAULT", "llama-3.3-70b-versatile")
 
     def chat(
         self,
@@ -32,12 +32,10 @@ class OpenRouterClient(BaseProvider):
         temperature: float = 0.7,
     ) -> ChatResult:
         if not self.is_available():
-            raise ProviderUnavailable("OPENROUTER_API_KEY not set")
+            raise ProviderUnavailable("GROQ_API_KEY not set")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/philipposk/AI-OS",
-            "X-Title": "ai-company",
         }
         payload = {
             "model": model,
@@ -50,7 +48,7 @@ class OpenRouterClient(BaseProvider):
         body = resp.json()
         choices = body.get("choices") or []
         if not choices:
-            raise RuntimeError(f"OpenRouter returned no choices: {body!r}")
+            raise RuntimeError(f"Groq returned no choices: {body!r}")
         usage = body.get("usage") or {}
         return ChatResult(
             text=choices[0]["message"]["content"],
