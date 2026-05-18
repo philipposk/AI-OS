@@ -7,6 +7,7 @@ from typing import List
 import requests
 
 from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
+from .rotation import ROTATE_SENTINELS
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class NvidiaClient(BaseProvider):
     def default_model(self) -> str:
         return os.getenv("ROUTER_NVIDIA_DEFAULT", "meta/llama-3.1-8b-instruct")
 
-    def chat(
+    def _chat_one(
         self,
         messages: List[Message],
         model: str,
@@ -59,3 +60,15 @@ class NvidiaClient(BaseProvider):
             completion_tokens=int(usage.get("completion_tokens", 0)),
             raw=body,
         )
+
+    def chat(
+        self,
+        messages: List[Message],
+        model: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+    ) -> ChatResult:
+        if model in ROTATE_SENTINELS:
+            from .nvidia_free import NvidiaRotator
+            return NvidiaRotator().chat_rotate(self, messages, max_tokens=max_tokens, temperature=temperature)
+        return self._chat_one(messages, model, max_tokens=max_tokens, temperature=temperature)

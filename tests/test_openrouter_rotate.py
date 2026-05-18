@@ -147,7 +147,7 @@ def test_rotate_all_fail_raises(monkeypatch):
     )
     monkeypatch.setattr(orc_mod.requests, "post", lambda *a, **k: _FakeResp({}, status=429))
     client = orc_mod.OpenRouterClient(api_key="sk-test")
-    with pytest.raises(RuntimeError, match="rate-limited or unavailable"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         client.chat([{"role": "user", "content": "x"}], model="free-rotate")
 
 

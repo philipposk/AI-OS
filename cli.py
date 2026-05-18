@@ -140,6 +140,29 @@ def cmd_queue(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_free_models(args: argparse.Namespace) -> int:
+    prov = args.provider
+    from dotenv import dotenv_values
+    env = (dotenv_values(".env") or {})
+    key_var = {"openrouter": "OPENROUTER_API_KEY", "groq": "GROQ_API_KEY", "nvidia": "NVCF_API_KEY"}[prov]
+    key = env.get(key_var) or os.environ.get(key_var)
+    if not key:
+        print(f"{key_var} not set")
+        return 2
+    if prov == "openrouter":
+        from router.openrouter_free import OpenRouterRotator as R
+    elif prov == "groq":
+        from router.groq_free import GroqRotator as R
+    else:
+        from router.nvidia_free import NvidiaRotator as R
+    r = R()
+    models, last_used = r.get_models(key, force_refresh=args.free_cmd == "refresh")
+    print(f"# {prov}: {len(models)} free models  (last used: {last_used or '—'})")
+    for m in models:
+        print(f"  {m.weight:5.1f}  ctx={m.context_length:>7d}  {m.id}")
+    return 0
+
+
 def cmd_memory(args: argparse.Namespace) -> int:
     if args.memory_cmd == "search":
         hits = memory_store.search(args.query, kind=args.kind, limit=args.limit)
@@ -193,11 +216,12 @@ def build_parser() -> argparse.ArgumentParser:
     msub.add_parser("count", help="Count documents")
     m.set_defaults(func=cmd_memory)
 
-    fr = sub.add_parser("free-models", help="OpenRouter free model list / rotation")
+    fr = sub.add_parser("free-models", help="Free model list / rotation for any provider")
     frsub = fr.add_subparsers(dest="free_cmd", required=True)
-    frsub.add_parser("list", help="Show cached free model list")
-    frsub.add_parser("refresh", help="Force-refresh from OpenRouter /models")
-    fr.set_defaults(func=lambda a: __import__("router.openrouter_free", fromlist=["main"]).main([a.free_cmd]))
+    for sc in ("list", "refresh"):
+        p_ = frsub.add_parser(sc, help=f"{sc} cached free models")
+        p_.add_argument("--provider", choices=("openrouter", "groq", "nvidia"), default="openrouter")
+    fr.set_defaults(func=cmd_free_models)
     return p
 
 
