@@ -401,6 +401,85 @@ def _render_voice() -> None:
             _components.html(_speak_html(final_text), height=40)
 
 
+def _render_git_panel() -> None:
+    """Recent commits + file history of workflow-touched paths + one-click revert."""
+    from tools import git_ops
+
+    with st.expander("Git history & revert", expanded=False):
+        # Pull workflow-touched paths from the timeline so the file-history
+        # filter is automatic.
+        touched: list[str] = []
+        for ev in st.session_state.get("events") or []:
+            for _, payload in ev.items():
+                if isinstance(payload, dict):
+                    for c in payload.get("code_changes") or []:
+                        p = c.get("path")
+                        if p and p not in touched:
+                            touched.append(p)
+        c1, c2 = st.columns([2, 1])
+        scope = c1.radio(
+            "scope",
+            ["recent", "workflow-touched files"] if touched else ["recent"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="git_scope",
+        )
+        limit = c2.number_input("limit", value=10, min_value=1, max_value=50, step=1,
+                                label_visibility="collapsed", key="git_limit")
+
+        try:
+            if scope == "workflow-touched files" and touched:
+                log = git_ops.git_log(paths=touched, limit=int(limit))
+            else:
+                log = git_ops.git_log(limit=int(limit))
+        except Exception as e:  # noqa: BLE001
+            st.error(f"git log failed: {e}")
+            return
+
+        if not log:
+            st.info("(no commits)")
+            return
+
+        for c in log:
+            row = st.columns([1, 4, 2, 1])
+            row[0].code(c["short"])
+            row[1].markdown(f"**{c['subject']}**")
+            row[2].caption(f"{c['author']} · {c['date'][:19]}")
+            if row[3].button("↩ revert", key=f"revert_{c['sha']}"):
+                try:
+                    new_sha = git_ops.git_revert(c["sha"])
+                    st.success(f"reverted; new HEAD = {new_sha[:7]}")
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"revert failed: {e}")
+                st.rerun()
+
+        # Optional gh PR/issue helper
+        if git_ops.gh_available():
+            st.markdown("---")
+            ref_in = st.text_input("Fetch PR/Issue by number or URL", key="gh_ref_in",
+                                   placeholder="e.g. 42 or https://github.com/owner/repo/pull/42")
+            if ref_in:
+                num = None
+                for r in git_ops.parse_issue_refs(ref_in):
+                    num = r
+                    break
+                if num is None and ref_in.strip().isdigit():
+                    num = int(ref_in.strip())
+                if num is None:
+                    st.warning("couldn't parse a number out of that")
+                else:
+                    item = git_ops.gh_pr_view(num) or git_ops.gh_issue_view(num)
+                    if not item:
+                        st.warning(f"#{num} not found via `gh`")
+                    else:
+                        kind = "PR" if "headRefName" in item else "Issue"
+                        st.markdown(f"**{kind} #{item.get('number')} — {item.get('title')}**  ({item.get('state')})")
+                        st.caption(item.get("url", ""))
+                        body = (item.get("body") or "").strip()
+                        if body:
+                            st.code(body[:2000])
+
+
 def _render_quick_chat() -> None:
     """Token-streamed one-off chat panel — bypasses the workflow entirely."""
     with st.expander("Quick chat (streaming)", expanded=False):
@@ -513,6 +592,7 @@ def main() -> None:
     st.markdown("---")
     _render_voice()
     _render_quick_chat()
+    _render_git_panel()
     _render_queue()
     _render_memory()
     _render_activity()
