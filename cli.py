@@ -169,12 +169,24 @@ def cmd_memory(args: argparse.Namespace) -> int:
         if not hits:
             print("(no matches)")
         for h in hits:
-            score = f"{h.score:.2f}" if h.score is not None else "—"
+            score = f"{h.score:.3f}" if h.score is not None else "—"
             print(f"#{h.id} kind={h.kind} wf={h.workflow_id} score={score}")
             print(f"  {h.text[:300]}")
         return 0
     if args.memory_cmd == "count":
         print(memory_store.count())
+        return 0
+    if args.memory_cmd == "reembed":
+        n = memory_store.reembed_all()
+        print(f"re-embedded {n} rows")
+        return 0
+    if args.memory_cmd == "backend":
+        from storage.embeddings import get_embedder
+        e = get_embedder()
+        if e is None:
+            print("backend: none (FTS5 keyword only). Run Ollama or `pip install sentence-transformers`.")
+        else:
+            print(f"backend: {e.name} dim={e.dim}")
         return 0
     return 2
 
@@ -214,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     msearch.add_argument("--kind", help="analysis|review|note|...")
     msearch.add_argument("--limit", type=int, default=5)
     msub.add_parser("count", help="Count documents")
+    msub.add_parser("reembed", help="Backfill embeddings for old rows (idempotent)")
+    msub.add_parser("backend", help="Show active embeddings backend")
     m.set_defaults(func=cmd_memory)
 
     fr = sub.add_parser("free-models", help="Free model list / rotation for any provider")

@@ -1,24 +1,30 @@
-"""Workflow + project memory using SQLite FTS5.
+"""Workflow + project memory.
 
-Chose FTS5 over ChromaDB because:
-- the Phase 0 cloud target is a £20/mo Oracle VM where chromadb +
-  opentelemetry was the original break-point;
-- FTS5 ships inside Python's stdlib sqlite3 — zero extra deps;
-- keyword search is good enough for "remember what we did with this file
-  yesterday"; if the user later needs true semantic search, they can swap
-  this module for a ChromaDB-backed equivalent without changing callers.
+Two search paths:
+  - Semantic via storage.embeddings.get_embedder() (Ollama → ST → none)
+  - FTS5 keyword (always available)
 
-Documents are stored with a free-form `kind`, optional `workflow_id`, and a
-JSON `meta` blob.
+Embeddings are stored as raw float32 bytes in BLOB column. Cosine similarity
+is computed in Python — fine for <100k docs on a small VM. Swap to sqlite-vec
+if you outgrow this.
+
+Public API unchanged from earlier phases: add(), search(), for_workflow(),
+count(). Each call to search() picks the path lazily — no global state
+beyond the embedder singleton.
 """
 from __future__ import annotations
 
+import array
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from .db import connect
+from .embeddings import cosine, get_embedder
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_docs (
@@ -27,7 +33,9 @@ CREATE TABLE IF NOT EXISTS memory_docs (
     workflow_id TEXT,
     meta TEXT,
     text TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    embedding BLOB,
+    embedding_model TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_memory_docs_kind ON memory_docs(kind);
 CREATE INDEX IF NOT EXISTS ix_memory_docs_workflow ON memory_docs(workflow_id);
@@ -77,29 +85,87 @@ class MemoryDoc:
 
 def _ensure(conn) -> None:
     conn.executescript(_SCHEMA)
+    # Schema migration: pre-Phase-J databases lack the embedding columns.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(memory_docs)").fetchall()}
+    if "embedding" not in cols:
+        conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding BLOB")
+    if "embedding_model" not in cols:
+        conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding_model TEXT")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _vec_to_blob(v: List[float]) -> bytes:
+    return array.array("f", v).tobytes()
+
+
+def _blob_to_vec(b: bytes) -> List[float]:
+    a = array.array("f")
+    a.frombytes(b)
+    return list(a)
+
+
 def add(text: str, *, kind: str = "note", workflow_id: Optional[str] = None, meta: Optional[dict] = None) -> int:
+    emb_blob: Optional[bytes] = None
+    emb_model: Optional[str] = None
+    embedder = get_embedder()
+    if embedder is not None:
+        try:
+            vec = embedder.embed([text])[0]
+            emb_blob = _vec_to_blob(vec)
+            emb_model = embedder.name
+        except Exception as e:  # noqa: BLE001
+            logger.warning("memory.add: embedder failed (%s); storing without embedding", e)
+
     with connect() as conn:
         _ensure(conn)
         cur = conn.execute(
-            "INSERT INTO memory_docs (kind, workflow_id, meta, text, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-            (kind, workflow_id, json.dumps(meta or {}), text, _now()),
+            "INSERT INTO memory_docs (kind, workflow_id, meta, text, created_at, embedding, embedding_model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (kind, workflow_id, json.dumps(meta or {}), text, _now(), emb_blob, emb_model),
         )
         return cur.fetchone()["id"]
 
 
 def _quote_fts(query: str) -> str:
-    # Wrap each non-empty token in quotes so FTS5 treats them literally.
     tokens = [t for t in query.split() if t]
     return " ".join(f'"{t.replace(chr(34), "")}"' for t in tokens) or '""'
 
 
-def search(query: str, *, kind: Optional[str] = None, limit: int = 10) -> List[MemoryDoc]:
+def _semantic_search(query: str, *, kind: Optional[str], limit: int) -> List[MemoryDoc]:
+    embedder = get_embedder()
+    if embedder is None:
+        return []
+    try:
+        q_vec = embedder.embed([query])[0]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory.search: embed query failed (%s); falling back to FTS", e)
+        return []
+
+    with connect() as conn:
+        _ensure(conn)
+        if kind:
+            rows = conn.execute(
+                "SELECT * FROM memory_docs WHERE kind = ? AND embedding IS NOT NULL", (kind,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM memory_docs WHERE embedding IS NOT NULL").fetchall()
+
+    scored: list[tuple[float, MemoryDoc]] = []
+    for row in rows:
+        v = _blob_to_vec(row["embedding"])
+        scored.append((cosine(q_vec, v), MemoryDoc.from_row(row)))
+    scored.sort(key=lambda t: -t[0])
+    out = []
+    for score, doc in scored[:limit]:
+        doc.score = score
+        out.append(doc)
+    return out
+
+
+def _fts_search(query: str, *, kind: Optional[str], limit: int) -> List[MemoryDoc]:
     if not query.strip():
         return []
     fts_query = _quote_fts(query)
@@ -128,6 +194,16 @@ def search(query: str, *, kind: Optional[str] = None, limit: int = 10) -> List[M
         return [MemoryDoc.from_row(r, score=r["score"]) for r in rows]
 
 
+def search(query: str, *, kind: Optional[str] = None, limit: int = 10) -> List[MemoryDoc]:
+    if not query.strip():
+        return []
+    # Semantic first; if it returns nothing (e.g. no embedded docs yet), fall back.
+    sem = _semantic_search(query, kind=kind, limit=limit)
+    if sem:
+        return sem
+    return _fts_search(query, kind=kind, limit=limit)
+
+
 def for_workflow(workflow_id: str, limit: int = 50) -> List[MemoryDoc]:
     with connect() as conn:
         _ensure(conn)
@@ -142,3 +218,32 @@ def count() -> int:
     with connect() as conn:
         _ensure(conn)
         return conn.execute("SELECT COUNT(*) FROM memory_docs").fetchone()[0]
+
+
+def reembed_all(*, batch: int = 64) -> int:
+    """Compute embeddings for any rows that lack them. Returns count updated."""
+    embedder = get_embedder()
+    if embedder is None:
+        return 0
+    updated = 0
+    with connect() as conn:
+        _ensure(conn)
+        while True:
+            rows = conn.execute(
+                "SELECT id, text FROM memory_docs WHERE embedding IS NULL ORDER BY id LIMIT ?", (batch,)
+            ).fetchall()
+            if not rows:
+                break
+            texts = [r["text"] for r in rows]
+            try:
+                vecs = embedder.embed(texts)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("reembed batch failed: %s", e)
+                break
+            for r, v in zip(rows, vecs):
+                conn.execute(
+                    "UPDATE memory_docs SET embedding=?, embedding_model=? WHERE id=?",
+                    (_vec_to_blob(v), embedder.name, r["id"]),
+                )
+                updated += 1
+    return updated
