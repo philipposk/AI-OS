@@ -129,3 +129,33 @@ class ModelRouter:
             workflow_id=workflow_id,
         )
         return result
+
+    def chat_stream(
+        self,
+        messages: List[Message],
+        task_type: str = "simple",
+        model: str | None = None,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        workflow_id: str | None = None,
+    ):
+        """Yield text fragments; last yield is a ChatResult. Records accounting after the stream completes."""
+        provider_name, resolved_model = self.resolve(task_type, model)
+        provider = self.providers[provider_name]
+        logger.info("router.chat_stream task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
+        final: ChatResult | None = None
+        for item in provider.chat_stream(messages, resolved_model, max_tokens=max_tokens, temperature=temperature):
+            if isinstance(item, ChatResult):
+                final = item
+            else:
+                yield item
+        if final is not None:
+            record_call(
+                provider=final.provider,
+                model=final.model,
+                prompt_tokens=final.prompt_tokens,
+                completion_tokens=final.completion_tokens,
+                task_type=task_type,
+                workflow_id=workflow_id,
+            )
+            yield final

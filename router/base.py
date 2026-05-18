@@ -46,3 +46,18 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def default_model(self) -> str: ...
+
+    def chat_stream(
+        self,
+        messages: List[Message],
+        model: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+    ):
+        """Yield text chunks; the LAST yield is a ChatResult with the full text + usage.
+
+        Default impl: call chat() and yield once. Override for real token streaming.
+        """
+        result = self.chat(messages, model, max_tokens=max_tokens, temperature=temperature)
+        yield result.text
+        yield result

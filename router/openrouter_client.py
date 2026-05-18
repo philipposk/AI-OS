@@ -73,3 +73,44 @@ class OpenRouterClient(BaseProvider):
             from .openrouter_free import chat_rotate
             return chat_rotate(self, messages, max_tokens=max_tokens, temperature=temperature)
         return self._chat_one(messages, model, max_tokens=max_tokens, temperature=temperature)
+
+    def chat_stream(self, messages, model, max_tokens=1024, temperature=0.7):
+        if model in ROTATE_SENTINELS:
+            # For streaming we don't rotate — resolve to the top free model and stream that.
+            from .openrouter_free import _singleton
+            models, _ = _singleton.get_models(self.api_key)
+            if not models:
+                raise RuntimeError("openrouter: no free models available for streaming")
+            model = models[0].id
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/philipposk/AI-OS",
+            "X-Title": "ai-company",
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        resp = requests.post(self.BASE_URL, headers=headers, json=payload, timeout=120, stream=True)
+        resp.raise_for_status()
+        from ._sse import parse_openai_sse
+        text_parts: list[str] = []
+        last_chunk: dict = {}
+        for frag, chunk in parse_openai_sse(resp):
+            if frag:
+                text_parts.append(frag)
+                yield frag
+            last_chunk = chunk
+        usage = last_chunk.get("usage") or {}
+        yield ChatResult(
+            text="".join(text_parts),
+            model=last_chunk.get("model", model),
+            provider=self.name,
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            raw=last_chunk,
+        )

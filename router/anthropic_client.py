@@ -67,3 +67,32 @@ class AnthropicClient(BaseProvider):
             completion_tokens=resp.usage.output_tokens,
             raw={"id": resp.id, "stop_reason": resp.stop_reason},
         )
+
+    def chat_stream(self, messages, model, max_tokens=1024, temperature=0.7):
+        if not self.is_available():
+            raise ProviderUnavailable("ANTHROPIC_API_KEY not set")
+        system = None
+        anth_msgs = []
+        for m in messages:
+            if m["role"] == "system":
+                system = m["content"] if system is None else f"{system}\n\n{m['content']}"
+            else:
+                anth_msgs.append({"role": m["role"], "content": m["content"]})
+        kwargs = dict(model=model, max_tokens=max_tokens, temperature=temperature, messages=anth_msgs)
+        if system:
+            kwargs["system"] = system
+        text_parts: list[str] = []
+        with self._client().messages.stream(**kwargs) as stream:
+            for fragment in stream.text_stream:
+                if fragment:
+                    text_parts.append(fragment)
+                    yield fragment
+            final = stream.get_final_message()
+        yield ChatResult(
+            text="".join(text_parts),
+            model=final.model,
+            provider=self.name,
+            prompt_tokens=final.usage.input_tokens,
+            completion_tokens=final.usage.output_tokens,
+            raw={"id": final.id, "stop_reason": final.stop_reason},
+        )

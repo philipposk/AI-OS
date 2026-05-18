@@ -61,6 +61,14 @@ def _drain(stream) -> None:
     """Consume the graph event stream until an interrupt or END."""
     pending = None
     for ev in stream:
+        # When stream_mode includes "custom", events arrive as (mode, payload) tuples.
+        if isinstance(ev, tuple) and len(ev) == 2:
+            mode, payload = ev
+            if mode == "custom" and isinstance(payload, dict) and "chunk" in payload:
+                st.session_state.setdefault("stream_buf", {}).setdefault(payload.get("node", "?"), [])
+                st.session_state.stream_buf[payload.get("node", "?")].append(payload["chunk"])
+                continue
+            ev = payload  # values mode
         if "__interrupt__" in ev:
             interrupts = ev["__interrupt__"]
             pending = interrupts[0].value if interrupts else None
@@ -101,13 +109,13 @@ def _start_workflow(task: str) -> None:
     st.session_state.finished = False
     st.session_state.activity.append(f"▶ workflow {wf} started: {task!r}")
     g = st.session_state.graph
-    _drain(g.stream({"task": task, "workflow_id": wf}, config=_config()))
+    _drain(g.stream({"task": task, "workflow_id": wf}, config=_config(), stream_mode=["values", "custom"]))
 
 
 def _resume(decision: Any) -> None:
     g = st.session_state.graph
     st.session_state.activity.append(f"⤴ resume: {decision}")
-    _drain(g.stream(Command(resume=decision), config=_config()))
+    _drain(g.stream(Command(resume=decision), config=_config(), stream_mode=["values", "custom"]))
 
 
 # ---------- UI helpers ----------
@@ -192,6 +200,17 @@ def _render_interrupt(payload: dict) -> None:
         st.rerun()
 
 
+def _render_streaming() -> None:
+    """Live token feed grouped by node, while the workflow is mid-flight."""
+    buf = st.session_state.get("stream_buf") or {}
+    if not buf:
+        return
+    st.subheader("Live tokens")
+    for node, chunks in buf.items():
+        with st.expander(f"{node} (streaming, {sum(len(c) for c in chunks)} chars)", expanded=True):
+            st.markdown("".join(chunks))
+
+
 def _render_timeline() -> None:
     if not st.session_state.events:
         return
@@ -209,6 +228,34 @@ def _render_timeline() -> None:
                             st.code(json.dumps(v, indent=2, default=str)[:4000], language="json")
                         else:
                             st.write(f"**{k}**: {v}")
+
+
+def _render_quick_chat() -> None:
+    """Token-streamed one-off chat panel — bypasses the workflow entirely."""
+    with st.expander("Quick chat (streaming)", expanded=False):
+        prompt = st.text_area("prompt", key="qc_prompt", placeholder="Ask the model directly…", height=80)
+        cols = st.columns([1, 1, 4])
+        task_type = cols[0].selectbox("task_type", ["simple", "analyze", "plan", "review"], key="qc_task")
+        max_tok = cols[1].number_input("max_tok", min_value=16, max_value=4096, value=256, step=16, key="qc_max")
+        if cols[2].button("Send", key="qc_send", disabled=not prompt):
+            placeholder = st.empty()
+            text_parts: list[str] = []
+            from router import ModelRouter as _MR
+            from router.base import ChatResult as _CR
+            r = _MR()
+            try:
+                for item in r.chat_stream(
+                    [{"role": "user", "content": prompt}],
+                    task_type=task_type,
+                    max_tokens=int(max_tok),
+                ):
+                    if isinstance(item, _CR):
+                        st.caption(f"provider={item.provider}  model={item.model}  in={item.prompt_tokens} out={item.completion_tokens}")
+                    else:
+                        text_parts.append(item)
+                        placeholder.markdown("".join(text_parts))
+            except Exception as e:  # noqa: BLE001
+                st.error(f"stream error: {e}")
 
 
 def _render_queue() -> None:
@@ -287,9 +334,11 @@ def main() -> None:
     if st.session_state.pending_interrupt:
         _render_interrupt(st.session_state.pending_interrupt)
 
+    _render_streaming()
     _render_timeline()
 
     st.markdown("---")
+    _render_quick_chat()
     _render_queue()
     _render_memory()
     _render_activity()

@@ -24,8 +24,32 @@ def _chat(task_type: str, system: str, user: str, *, workflow_id: str | None = N
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+    # If a LangGraph custom-stream writer is available, stream chunks through
+    # it so the dashboard can render tokens live. Falls back to a single shot
+    # if streaming or the writer isn't available.
+    writer = _get_stream_writer()
+    if writer is not None:
+        try:
+            text_parts: list[str] = []
+            from router.base import ChatResult as _CR
+            for item in _router.chat_stream(messages, task_type=task_type, workflow_id=workflow_id, max_tokens=2048):
+                if isinstance(item, _CR):
+                    return item.text
+                text_parts.append(item)
+                writer({"node": task_type, "chunk": item})
+            return "".join(text_parts)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("streaming failed (%s); falling back to non-streaming", e)
     res = _router.chat(messages, task_type=task_type, workflow_id=workflow_id, max_tokens=2048)
     return res.text
+
+
+def _get_stream_writer():
+    try:
+        from langgraph.config import get_stream_writer
+        return get_stream_writer()
+    except Exception:
+        return None
 
 
 # ---------- nodes ----------
