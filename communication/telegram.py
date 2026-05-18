@@ -45,8 +45,16 @@ class TelegramDispatcher:
     it from worker threads via run_coroutine_threadsafe.
     """
 
-    def __init__(self, post: Callable[[int, str, Optional[list]], Awaitable[None]], loop: asyncio.AbstractEventLoop):
+    def __init__(
+        self,
+        post: Callable[[int, str, Optional[list]], Awaitable[None]],
+        loop: asyncio.AbstractEventLoop,
+        post_photo: Optional[Callable[[int, bytes, str], Awaitable[None]]] = None,
+        post_audio: Optional[Callable[[int, bytes, str], Awaitable[None]]] = None,
+    ):
         self._post = post
+        self._post_photo = post_photo
+        self._post_audio = post_audio
         self._loop = loop
         self._graph = build_graph()
         self._wf: Dict[str, _Active] = {}
@@ -87,6 +95,7 @@ class TelegramDispatcher:
             if interrupted:
                 text, kb = self._render_checkpoint(wid, interrupted)
                 self._post_blocking(wf.chat_id, text, kb)
+                self._post_media(wf.chat_id, wid, interrupted)
             else:
                 self._post_blocking(wf.chat_id, f"✅ workflow `{wid}` finished.", None)
                 with self._lock:
@@ -96,6 +105,30 @@ class TelegramDispatcher:
             self._post_blocking(wf.chat_id, f"❌ error in workflow `{wid}`: `{e}`", None)
             with self._lock:
                 self._wf.pop(wid, None)
+
+    def _post_media(self, chat_id: int, wid: str, payload: dict) -> None:
+        if os.getenv("AI_COMPANY_MEDIA", "1") in ("0", "false", "no"):
+            return
+        try:
+            from . import media as _m
+
+            if self._post_photo is not None:
+                try:
+                    png = _m.render_checkpoint_image(payload, wid)
+                    fut = asyncio.run_coroutine_threadsafe(self._post_photo(chat_id, png, f"{wid}.png"), self._loop)
+                    fut.result(timeout=30)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("telegram photo upload skipped: %s", e)
+            if self._post_audio is not None:
+                try:
+                    audio, _mime, _ = _m.synthesize_voice(_m._narration_text(payload))
+                    if audio:
+                        fut = asyncio.run_coroutine_threadsafe(self._post_audio(chat_id, audio, f"{wid}.mp3"), self._loop)
+                        fut.result(timeout=60)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("telegram audio upload skipped: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("telegram media post failed: %s", e)
 
     @staticmethod
     def _render_checkpoint(wid: str, payload: dict) -> tuple[str, list]:
@@ -146,6 +179,26 @@ def _make_post(bot):
     return post
 
 
+def _make_post_photo(bot):
+    from io import BytesIO
+
+    async def post_photo(chat_id: int, data: bytes, filename: str) -> None:
+        await bot.send_photo(chat_id=chat_id, photo=BytesIO(data), filename=filename)
+
+    return post_photo
+
+
+def _make_post_audio(bot):
+    from io import BytesIO
+
+    async def post_audio(chat_id: int, data: bytes, filename: str) -> None:
+        # Use send_audio (mp3) — works in every client. send_voice requires opus
+        # which needs ffmpeg, deferred.
+        await bot.send_audio(chat_id=chat_id, audio=BytesIO(data), filename=filename, title="checkpoint voice")
+
+    return post_audio
+
+
 def build_application():
     """Construct the python-telegram-bot Application. Lazy import."""
     try:
@@ -162,7 +215,12 @@ def build_application():
     state: dict = {"dispatcher": None}
 
     async def post_init(app):
-        state["dispatcher"] = TelegramDispatcher(post=_make_post(app.bot), loop=asyncio.get_running_loop())
+        state["dispatcher"] = TelegramDispatcher(
+            post=_make_post(app.bot),
+            loop=asyncio.get_running_loop(),
+            post_photo=_make_post_photo(app.bot),
+            post_audio=_make_post_audio(app.bot),
+        )
 
     application.post_init = post_init
 

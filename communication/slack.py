@@ -26,7 +26,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from langgraph.types import Command
 
@@ -86,6 +86,7 @@ class WorkflowDispatcher:
             if interrupted:
                 wf.last_pending = interrupted
                 self._post(wf.channel, wf.thread_ts, *self._render_checkpoint(wid, interrupted))
+                self._post_media(wf.channel, wf.thread_ts, wid, interrupted)
             else:
                 self._post(wf.channel, wf.thread_ts, f"✅ workflow `{wid}` finished.", [])
                 with self._lock:
@@ -95,6 +96,31 @@ class WorkflowDispatcher:
             self._post(wf.channel, wf.thread_ts, f"❌ error in workflow `{wid}`: `{e}`", [])
             with self._lock:
                 self._wf.pop(wid, None)
+
+    def _post_media(self, channel: str, thread_ts: str, wid: str, payload: dict) -> None:
+        """Best-effort: post a screenshot + voice note of the checkpoint. Failures are logged."""
+        if os.getenv("AI_COMPANY_MEDIA", "1") in ("0", "false", "no"):
+            return
+        try:
+            from . import media as _m
+
+            try:
+                png = _m.render_checkpoint_image(payload, wid)
+                self._upload(channel, thread_ts, png, filename=f"{wid}.png", title=f"checkpoint {payload.get('kind','?')}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("slack image upload skipped: %s", e)
+            try:
+                audio, mime, _ = _m.synthesize_voice(_m._narration_text(payload))
+                if audio:
+                    self._upload(channel, thread_ts, audio, filename=f"{wid}.mp3", title="voice note")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("slack voice upload skipped: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("media post failed: %s", e)
+
+    # _upload is filled in by build_app() so test paths can stub it.
+    def _upload(self, channel: str, thread_ts: str, data: bytes, *, filename: str, title: str) -> None:  # pragma: no cover
+        logger.debug("slack _upload not configured; skipping %s", filename)
 
     # ---------- Block Kit rendering ----------
 
@@ -146,6 +172,14 @@ def build_app():
         app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text, blocks=blocks or None)
 
     dispatcher = WorkflowDispatcher(post_blocks_callable=_post)
+
+    def _upload(channel: str, thread_ts: str, data: bytes, *, filename: str, title: str) -> None:
+        # files_upload_v2 is the supported path in slack-sdk >= 3.20.
+        app.client.files_upload_v2(
+            channel=channel, thread_ts=thread_ts, content=data, filename=filename, title=title,
+        )
+
+    dispatcher._upload = _upload  # type: ignore[attr-defined]
 
     @app.command("/ai-run")
     def handle_run(ack, body, respond):
