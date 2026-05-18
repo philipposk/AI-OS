@@ -134,6 +134,31 @@ _PLAN_SYSTEM = (
 )
 
 
+def search_node(state: GraphState) -> Dict[str, Any]:
+    """Phase V: optional pre-plan web search.
+
+    Only runs when `state["search_enabled"]` is True. The conditional edge
+    in graph.py also skips this node when the flag is unset, but we
+    short-circuit here too so direct unit tests work.
+    """
+    if not state.get("search_enabled"):
+        return {}
+    task = state.get("task", "")
+    if not task.strip():
+        return {}
+    try:
+        from tools.web_search import search as web_search
+    except Exception as e:  # noqa: BLE001
+        logger.warning("web_search import failed: %s", e)
+        return {}
+    try:
+        hits = web_search(task, k=5)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("web_search failed: %s", e)
+        hits = []
+    return {"search_results": hits[:5]}
+
+
 def _extract_json_array(text: str) -> list:
     # Best-effort: strip fences, find first `[`...`]`.
     text = text.strip()
@@ -148,6 +173,16 @@ def _extract_json_array(text: str) -> list:
 def plan_node(state: GraphState) -> Dict[str, Any]:
     wf = state.get("workflow_id")
     user = f"Task: {state['task']}\n\nContext from analysis:\n{state.get('analysis', '')}"
+    # Phase V: prepend short web-search context block when search ran.
+    hits = state.get("search_results") or []
+    if hits:
+        lines = ["Recent web context (top results, trimmed):"]
+        for i, h in enumerate(hits, 1):
+            title = (h.get("title") or "")[:120]
+            snippet = (h.get("snippet") or "").replace("\n", " ")[:200]
+            url = h.get("url", "")
+            lines.append(f"  {i}. {title} — {snippet} ({url})")
+        user = "\n".join(lines) + "\n\n" + user
     try:
         raw = _chat("plan", _PLAN_SYSTEM, user, workflow_id=wf, state=state)
     except BudgetExceeded as e:

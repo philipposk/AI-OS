@@ -20,6 +20,7 @@ from .nodes import (
     commit_node,
     plan_node,
     review_node,
+    search_node,
     test_node,
 )
 from .state import GraphState
@@ -85,13 +86,15 @@ def build_graph(checkpointer: Optional[Any] = None):
     g.add_node("checkpoint_commit", review_commit_checkpoint)
     g.add_node("do_commit", commit_node)
     g.add_node("checkpoint_budget", review_budget_checkpoint)
+    g.add_node("do_search", search_node)
 
     g.add_edge(START, "do_analyze")
-    # Each LLM-producing node routes through `_budget_or(canonical_next)` so a
-    # tripped budget short-circuits to checkpoint_budget; otherwise the node
-    # behaves exactly as before.
-    g.add_conditional_edges("do_analyze", _budget_or("do_plan"),
-                            {"do_plan": "do_plan", "checkpoint_budget": "checkpoint_budget"})
+    # Phase V: after analyze, optionally hit web search before planning. The
+    # _budget_or wrapper still applies — if the prior node tripped a budget,
+    # we divert to checkpoint_budget regardless of search_enabled.
+    g.add_conditional_edges("do_analyze", _budget_or("do_search"),
+                            {"do_search": "do_search", "checkpoint_budget": "checkpoint_budget"})
+    g.add_edge("do_search", "do_plan")
     g.add_conditional_edges("do_plan", _budget_or("checkpoint_plan"),
                             {"checkpoint_plan": "checkpoint_plan", "checkpoint_budget": "checkpoint_budget"})
     g.add_conditional_edges("checkpoint_plan", _after_plan_review, {"do_code": "do_code", END: END})

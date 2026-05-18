@@ -147,7 +147,12 @@ def _start_workflow(task: str) -> None:
     st.session_state.finished = False
     st.session_state.activity.append(f"▶ workflow {wf} started: {task!r}")
     g = st.session_state.graph
-    _drain(g.stream({"task": task, "workflow_id": wf}, config=_config(), stream_mode=["values", "custom"]))
+    payload = {
+        "task": task,
+        "workflow_id": wf,
+        "search_enabled": bool(st.session_state.get("search_enabled", False)),
+    }
+    _drain(g.stream(payload, config=_config(), stream_mode=["values", "custom"]))
 
 
 def _resume(decision: Any) -> None:
@@ -610,10 +615,16 @@ def main() -> None:
 
     st.markdown("### New task")
     task = st.text_input("Describe the change you want made", key="task_input", placeholder='e.g. "Add a --version flag to cli.py"')
-    cols = st.columns([1, 1, 5])
+    cols = st.columns([1, 1, 1, 4])
     if cols[0].button("Run", type="primary", disabled=not task or st.session_state.pending_interrupt is not None):
         _start_workflow(task)
         st.rerun()
+    # Phase V: web search toggle wired into _start_workflow payload.
+    st.session_state.search_enabled = cols[2].checkbox(
+        "🔎 web search",
+        value=st.session_state.get("search_enabled", False),
+        help="Inject Brave/Serper/Tavily/DDG results into the plan-prompt.",
+    )
     if cols[1].button("Reset", disabled=st.session_state.workflow_id is None):
         for k in ("workflow_id", "events", "pending_interrupt", "finished", "activity",
                   "narrate_queue", "narrate_emitted", "stream_buf"):

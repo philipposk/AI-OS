@@ -65,7 +65,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = {"configurable": {"thread_id": wf}}
     print(f"# workflow_id={wf}")
 
-    payload: Any = {"task": args.task, "workflow_id": wf}
+    payload: Any = {"task": args.task, "workflow_id": wf,
+                    "search_enabled": bool(getattr(args, "search", False))}
     while True:
         interrupted = False
         for ev in graph.stream(payload, config=config):
@@ -294,6 +295,8 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run a workflow")
     run.add_argument("task", help="Free-form task description")
     run.add_argument("--workflow-id", help="Resume an existing workflow id")
+    run.add_argument("--search", action="store_true",
+                     help="Inject web-search results into the plan-prompt (Brave / Serper / Tavily / DDG cascade).")
     run.set_defaults(func=cmd_run)
 
     sub.add_parser("providers", help="List provider availability").set_defaults(func=cmd_providers)

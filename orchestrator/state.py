@@ -63,3 +63,7 @@ class GraphState(TypedDict, total=False):
     # Per-workflow override of $WORKFLOW_BUDGET_USD, raised by the human
     # when they approve "raise ceiling" at the budget checkpoint.
     budget_ceiling_usd: Optional[float]
+
+    # Phase V: web search input + output
+    search_enabled: bool                # set by CLI --search or dashboard toggle
+    search_results: List[dict]          # injected into plan-prompt by plan_node
