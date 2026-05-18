@@ -67,3 +67,6 @@ class GraphState(TypedDict, total=False):
     # Phase V: web search input + output
     search_enabled: bool                # set by CLI --search or dashboard toggle
     search_results: List[dict]          # injected into plan-prompt by plan_node
+
+    # Phase W: multi-agent crew toggle (state beats $CREW_MODE env)
+    crew_mode: Optional[bool]

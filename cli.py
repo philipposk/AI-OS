@@ -66,7 +66,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"# workflow_id={wf}")
 
     payload: Any = {"task": args.task, "workflow_id": wf,
-                    "search_enabled": bool(getattr(args, "search", False))}
+                    "search_enabled": bool(getattr(args, "search", False)),
+                    "crew_mode": (True if getattr(args, "crew", False) else None)}
     while True:
         interrupted = False
         for ev in graph.stream(payload, config=config):
@@ -297,6 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--workflow-id", help="Resume an existing workflow id")
     run.add_argument("--search", action="store_true",
                      help="Inject web-search results into the plan-prompt (Brave / Serper / Tavily / DDG cascade).")
+    run.add_argument("--crew", action="store_true",
+                     help="Use multi-agent crew (Planner + Critic) for the plan step instead of a single LLM.")
     run.set_defaults(func=cmd_run)
 
     sub.add_parser("providers", help="List provider availability").set_defaults(func=cmd_providers)
@@ -355,7 +358,33 @@ def build_parser() -> argparse.ArgumentParser:
     osearch.add_argument("query")
     osearch.add_argument("--limit", type=int, default=10)
     o.set_defaults(func=cmd_obsidian)
+
+    w = sub.add_parser("web", help="Web search utilities")
+    wsub = w.add_subparsers(dest="web_cmd", required=True)
+    wsub.add_parser("backend", help="Show which web search backend is active")
+    wsearch = wsub.add_parser("search", help="Search the web")
+    wsearch.add_argument("query")
+    wsearch.add_argument("-k", "--top", type=int, default=5)
+    w.set_defaults(func=cmd_web)
     return p
+
+
+def cmd_web(args):
+    from tools import web_search as ws
+    if args.web_cmd == "backend":
+        print(f"web search backend: {ws.available_backend()}")
+        return 0
+    if args.web_cmd == "search":
+        hits = ws.search(args.query, k=args.top)
+        if not hits:
+            print("(no results)")
+        for h in hits:
+            print(f"- {h['title']}  [{h['source']}]")
+            print(f"  {h['url']}")
+            if h.get("snippet"):
+                print(f"  {h['snippet'][:200]}")
+        return 0
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:

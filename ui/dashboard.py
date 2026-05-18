@@ -151,6 +151,7 @@ def _start_workflow(task: str) -> None:
         "task": task,
         "workflow_id": wf,
         "search_enabled": bool(st.session_state.get("search_enabled", False)),
+        "crew_mode": True if st.session_state.get("crew_mode", False) else None,
     }
     _drain(g.stream(payload, config=_config(), stream_mode=["values", "custom"]))
 
@@ -554,6 +555,28 @@ def _render_quick_chat() -> None:
                 st.error(f"stream error: {e}")
 
 
+def _render_crew_transcript() -> None:
+    """Phase W: show crew_messages for the current workflow."""
+    if not st.session_state.get("workflow_id"):
+        return
+    try:
+        from orchestrator.crew.bus import MessageBus
+    except Exception:  # noqa: BLE001
+        return
+    msgs = MessageBus.transcript(st.session_state.workflow_id)
+    if not msgs:
+        return
+    with st.expander(f"Crew transcript ({len(msgs)} message(s))", expanded=False):
+        for m in msgs:
+            head = f"**{m.role}** · `{m.ts[:19]}`"
+            if m.meta.get("model"):
+                head += f" · {m.meta['provider']}/{m.meta['model']}"
+            if m.meta.get("revision"):
+                head += " · _revision_"
+            st.markdown(head)
+            st.code(m.content[:4000], language="markdown")
+
+
 def _render_queue() -> None:
     st.subheader("Queue")
     counts = task_queue.status_counts()
@@ -625,6 +648,12 @@ def main() -> None:
         value=st.session_state.get("search_enabled", False),
         help="Inject Brave/Serper/Tavily/DDG results into the plan-prompt.",
     )
+    # Phase W: crew mode toggle.
+    st.session_state.crew_mode = cols[3].checkbox(
+        "👥 crew mode",
+        value=st.session_state.get("crew_mode", False),
+        help="Use Planner + Critic crew for the plan step instead of a single LLM.",
+    )
     if cols[1].button("Reset", disabled=st.session_state.workflow_id is None):
         for k in ("workflow_id", "events", "pending_interrupt", "finished", "activity",
                   "narrate_queue", "narrate_emitted", "stream_buf"):
@@ -645,6 +674,7 @@ def main() -> None:
     _render_voice()
     _render_quick_chat()
     _render_git_panel()
+    _render_crew_transcript()
     _render_queue()
     _render_memory()
     _render_activity()

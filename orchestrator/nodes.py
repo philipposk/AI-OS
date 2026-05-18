@@ -172,6 +172,35 @@ def _extract_json_array(text: str) -> list:
 
 def plan_node(state: GraphState) -> Dict[str, Any]:
     wf = state.get("workflow_id")
+    # Phase W: crew mode replaces the single-LLM plan with Planner+Critic.
+    # The coordinator returns the same plan-step shape, so the downstream
+    # code path is unchanged.
+    try:
+        from .crew import coordinate_plan, is_crew_mode
+        crew_on = is_crew_mode(state)
+    except Exception:  # noqa: BLE001
+        crew_on = False
+    if crew_on:
+        try:
+            assert_within(state)
+            steps_raw = coordinate_plan(state["task"], state.get("analysis", ""), workflow_id=wf)
+        except BudgetExceeded as e:
+            return _bb(e, "do_plan")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("crew coordinator failed (%s); falling back to single-LLM plan", e)
+            steps_raw = None
+        if steps_raw is not None:
+            steps: List[PlanStep] = []
+            for s in steps_raw[:5]:
+                if not isinstance(s, dict):
+                    continue
+                steps.append(PlanStep(
+                    title=str(s.get("title", ""))[:200],
+                    detail=str(s.get("detail", "")),
+                    files=[str(f) for f in (s.get("files") or [])],
+                ))
+            return {"plan": steps}
+
     user = f"Task: {state['task']}\n\nContext from analysis:\n{state.get('analysis', '')}"
     # Phase V: prepend short web-search context block when search ran.
     hits = state.get("search_results") or []
