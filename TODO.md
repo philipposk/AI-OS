@@ -25,20 +25,19 @@ out, not deleted, so the history of what was considered stays visible.
 
 ## Decisions on hold
 
-- [ ] **Obsidian second-brain integration.**
-  Two paths: (a) point [logancyang/obsidian-copilot]
-  (https://github.com/logancyang/obsidian-copilot) at our `api/server.py`
-  shim — zero code on our side; (b) build `storage/obsidian.py` that
-  mirrors memory.add() into `$OBSIDIAN_VAULT_PATH/*.md`. (a) is the
-  cheap win; (b) adds vault sync if useful. Defer until vault sync is
-  actually wanted.
+- [ ] **Obsidian second-brain (b) — done.** `storage/obsidian.py` mirrors
+  memory.add() into `$OBSIDIAN_VAULT_PATH/ai_company/<workflow>/<id-slug>.md`
+  with YAML frontmatter; analyze_node also pulls top-3 substring matches
+  from the vault. Set `OBSIDIAN_VAULT_PATH` to enable. Path (a) — pointing
+  [logancyang/obsidian-copilot](https://github.com/logancyang/obsidian-copilot)
+  at our shim — is still optional; tracked as Phase U in the build plan.
 
-- [ ] **Git/versioning visibility.**
-  - dashboard: show `git log` for workflow-modified files + "revert this
-    commit" button (~60 LOC, easy)
-  - tools/git_ops: add `gh pr view` / `gh issue list` wrappers so the
-    agent can read PR context (~80 LOC)
-  - GitHub MCP server: skip for now, extra runtime layer.
+- [ ] **Git/versioning visibility — done.** Dashboard now has a Git panel
+  (recent commits, scope toggle to workflow-touched files, one-click
+  revert). `tools/git_ops` gained `gh_pr_view` / `gh_pr_list` /
+  `gh_issue_view` / `gh_issue_list` / `gh_context_for_task` so
+  analyze_node pulls #123 + URL refs out of the user task and injects
+  PR/issue body as context. MCP server still skipped.
 
 - [ ] **Jarvis desktop assistant** ([pickle-com/glass]
   (https://github.com/pickle-com/glass) or similar). Point it at our
@@ -71,3 +70,5 @@ out, not deleted, so the history of what was considered stays visible.
 ## Done (additional)
 
 - [x] Phase Q — Slack + Telegram screenshot + voice-note per checkpoint (470e58f)
+- [x] Phase R — Obsidian vault mirror + gh PR/issue wrappers in tools/git_ops (21b2fe4)
+- [x] Phase S — Dashboard git panel (recent commits + revert + PR/issue fetch) (965cda8)
