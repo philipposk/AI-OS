@@ -140,6 +140,31 @@ def cmd_queue(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_voice(args: argparse.Namespace) -> int:
+    from router.transcription import get_transcriber
+
+    if args.voice_cmd == "backend":
+        t = get_transcriber()
+        if t is None:
+            print("STT backend: none. Set GROQ_API_KEY to enable.")
+        else:
+            print(f"STT backend: {t.name} (model {t.model})")
+        return 0
+    if args.voice_cmd == "transcribe":
+        t = get_transcriber()
+        if t is None:
+            print("STT backend: none. Set GROQ_API_KEY first.")
+            return 2
+        from pathlib import Path
+        path = Path(args.path)
+        mime = {"webm": "audio/webm", "mp3": "audio/mpeg", "wav": "audio/wav",
+                "m4a": "audio/mp4", "ogg": "audio/ogg", "flac": "audio/flac"}.get(path.suffix.lstrip(".").lower(), "audio/webm")
+        tr = t.transcribe(path.read_bytes(), filename=path.name, mime_type=mime, language=args.language)
+        print(tr.text)
+        return 0
+    return 2
+
+
 def cmd_free_models(args: argparse.Namespace) -> int:
     prov = args.provider
     from dotenv import dotenv_values
@@ -236,6 +261,14 @@ def build_parser() -> argparse.ArgumentParser:
         p_ = frsub.add_parser(sc, help=f"{sc} cached free models")
         p_.add_argument("--provider", choices=("openrouter", "groq", "nvidia"), default="openrouter")
     fr.set_defaults(func=cmd_free_models)
+
+    v = sub.add_parser("voice", help="Speech-to-text utilities")
+    vsub = v.add_subparsers(dest="voice_cmd", required=True)
+    vsub.add_parser("backend", help="Show active STT backend")
+    vtrans = vsub.add_parser("transcribe", help="Transcribe an audio file")
+    vtrans.add_argument("path", help="Path to audio file (webm/mp3/wav/m4a/ogg)")
+    vtrans.add_argument("--language", default=None, help="ISO language code (auto-detect if omitted)")
+    v.set_defaults(func=cmd_voice)
     return p
 
 

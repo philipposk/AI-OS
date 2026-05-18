@@ -230,6 +230,104 @@ def _render_timeline() -> None:
                             st.write(f"**{k}**: {v}")
 
 
+def _speak_html(text: str, *, rate: float = 1.0, pitch: float = 1.0, voice_hint: str = "") -> str:
+    """Build a tiny self-contained HTML snippet that speaks `text` via the browser's
+    SpeechSynthesis API. Embeds the text safely as a JSON-escaped string."""
+    import html as _html
+    import json as _json
+    # JSON-encode AND escape `</` so a malicious "</script>" inside text can't
+    # break out of the <script> block. Browsers parse `<\/script>` as just `</script>`
+    # inside a string literal, so the JS still receives the original characters.
+    def _safe_js(s: str) -> str:
+        return _json.dumps(s).replace("</", "<\\/")
+    safe = _safe_js(text)
+    voice_filter = _safe_js(voice_hint.lower())
+    return f"""
+    <script>
+    (function() {{
+      try {{
+        const u = new SpeechSynthesisUtterance({safe});
+        u.rate = {rate}; u.pitch = {pitch};
+        const pickVoice = () => {{
+          const voices = speechSynthesis.getVoices();
+          if (!voices.length) return;
+          const want = {voice_filter};
+          if (want) {{
+            const m = voices.find(v => (v.name + ' ' + v.lang).toLowerCase().includes(want));
+            if (m) u.voice = m;
+          }}
+          speechSynthesis.cancel();
+          speechSynthesis.speak(u);
+        }};
+        if (speechSynthesis.getVoices().length) pickVoice();
+        else speechSynthesis.onvoiceschanged = pickVoice;
+      }} catch (e) {{ console.warn('TTS failed', e); }}
+    }})();
+    </script>
+    <div style="font-size:12px;color:#666;">🔊 reading aloud&hellip; <code>{_html.escape(text[:60])}{('&hellip;' if len(text) > 60 else '')}</code></div>
+    """
+
+
+def _render_voice() -> None:
+    """Voice-driven quick chat: mic → STT → router → TTS via browser."""
+    with st.expander("Voice chat 🎙️", expanded=False):
+        from router.transcription import get_transcriber
+
+        stt = get_transcriber()
+        if stt is None:
+            st.warning("No STT backend. Set GROQ_API_KEY (free dev tier) to enable voice.")
+            return
+        st.caption(f"STT backend: **{stt.name}** (model `{stt.model}`)")
+
+        audio = st.audio_input("Hold to record. Release to send.", key="voice_in")
+        if audio is None:
+            return
+
+        # Streamlit's AudioRecorderResult acts like a BytesIO.
+        audio_bytes = audio.getvalue() if hasattr(audio, "getvalue") else audio.read()
+        if not audio_bytes:
+            st.info("(empty recording)")
+            return
+
+        with st.spinner("transcribing…"):
+            try:
+                tr = stt.transcribe(audio_bytes, filename="mic.webm", mime_type="audio/webm")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"STT failed: {e}")
+                return
+
+        if not tr.text.strip():
+            st.info("(silence)")
+            return
+        st.markdown(f"**You said:** _{tr.text}_")
+
+        # Route the transcript through the router as a streamed chat.
+        from router import ModelRouter as _MR
+        from router.base import ChatResult as _CR
+        r = _MR()
+        placeholder = st.empty()
+        text_parts: list[str] = []
+        try:
+            for item in r.chat_stream(
+                [{"role": "user", "content": tr.text}],
+                task_type="simple",
+                max_tokens=300,
+            ):
+                if isinstance(item, _CR):
+                    st.caption(f"provider={item.provider} model={item.model} tokens={item.prompt_tokens}/{item.completion_tokens}")
+                else:
+                    text_parts.append(item)
+                    placeholder.markdown("".join(text_parts))
+        except Exception as e:  # noqa: BLE001
+            st.error(f"chat failed: {e}")
+            return
+
+        final_text = "".join(text_parts).strip()
+        if final_text:
+            import streamlit.components.v1 as _components
+            _components.html(_speak_html(final_text), height=40)
+
+
 def _render_quick_chat() -> None:
     """Token-streamed one-off chat panel — bypasses the workflow entirely."""
     with st.expander("Quick chat (streaming)", expanded=False):
@@ -338,6 +436,7 @@ def main() -> None:
     _render_timeline()
 
     st.markdown("---")
+    _render_voice()
     _render_quick_chat()
     _render_queue()
     _render_memory()
