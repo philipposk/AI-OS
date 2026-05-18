@@ -39,6 +39,17 @@ def _prompt_decision(payload: dict) -> Any:
     kind = payload.get("kind", "?")
     print(f"\n----- HUMAN CHECKPOINT: {kind} -----")
     print(json.dumps({k: v for k, v in payload.items() if k != "kind"}, indent=2, default=str)[:4000])
+    if kind == "budget_exceeded":
+        # Phase U: terminal flow for the circuit breaker — either raise the
+        # ceiling (number) or abort (anything else / empty).
+        while True:
+            ans = input("Raise ceiling to USD (blank = abort): ").strip()
+            if not ans:
+                return {"approved": False, "reason": "budget abort"}
+            try:
+                return {"approved": True, "raise_to": float(ans)}
+            except ValueError:
+                print("Not a number. Try again or press Enter to abort.")
     while True:
         ans = input("approve? [y/N/reason]: ").strip()
         if ans.lower() in ("y", "yes"):

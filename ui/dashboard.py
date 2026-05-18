@@ -195,6 +195,27 @@ def _sidebar() -> None:
     rep_all = accounting_store.report()
     st.sidebar.metric("Total cost (all time)", f"${rep_all['total_cost_usd']:.4f}")
 
+    # Phase U: budget chip — visible in sidebar so users see headroom before
+    # they hit the circuit breaker.
+    from orchestrator.budget import status as _budget_status
+    bs = _budget_status({"workflow_id": st.session_state.workflow_id})
+    if bs["workflow_limit_usd"] is not None or bs["global_limit_usd"] is not None:
+        st.sidebar.header("Budget")
+        if bs["workflow_limit_usd"] is not None:
+            pct = bs["workflow_pct"] or 0.0
+            colour = "🟢" if pct < 70 else "🟡" if pct < 100 else "🔴"
+            st.sidebar.write(
+                f"{colour} workflow: ${bs['workflow_cost_usd']:.4f} / ${bs['workflow_limit_usd']:.4f}"
+                f" ({pct:.0f}%)"
+            )
+        if bs["global_limit_usd"] is not None:
+            pct = bs["global_pct"] or 0.0
+            colour = "🟢" if pct < 70 else "🟡" if pct < 100 else "🔴"
+            st.sidebar.write(
+                f"{colour} global: ${bs['global_cost_usd']:.4f} / ${bs['global_limit_usd']:.4f}"
+                f" ({pct:.0f}%)"
+            )
+
 
 def _render_interrupt(payload: dict) -> None:
     kind = payload.get("kind", "?")
@@ -231,6 +252,26 @@ def _render_interrupt(payload: dict) -> None:
         st.markdown("**Files**")
         for ch in payload.get("code_changes", []) or []:
             st.write(f"- `{ch.get('path')}`")
+    elif kind == "budget_exceeded":
+        scope = payload.get("scope")
+        cur = payload.get("current_usd") or 0.0
+        lim = payload.get("limit_usd") or 0.0
+        st.error(f"{scope.capitalize()} budget tripped: ${cur:.4f} ≥ ${lim:.4f}")
+        st.caption(f"Blocked node: `{payload.get('next_node')}` · workflow `{payload.get('workflow_id')}`")
+        st.text_input("Raise ceiling to (USD)", key="budget_raise_to", placeholder=f"e.g. {lim * 2:.2f}")
+        cols = st.columns(3)
+        if cols[0].button("⤴ Raise & continue", type="primary", use_container_width=True):
+            raw = (st.session_state.get("budget_raise_to") or "").strip()
+            try:
+                raise_to = float(raw) if raw else lim * 2
+            except ValueError:
+                raise_to = lim * 2
+            _resume({"approved": True, "raise_to": raise_to})
+            st.rerun()
+        if cols[1].button("✋ Abort workflow", use_container_width=True):
+            _resume({"approved": False, "reason": "budget abort"})
+            st.rerun()
+        return
 
     cols = st.columns(3)
     if cols[0].button("✅ Approve", type="primary", use_container_width=True):

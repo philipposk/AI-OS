@@ -188,12 +188,16 @@ def code_node(state: GraphState) -> Dict[str, Any]:
                 changes.append(CodeChange(path=f, before="", after="", diff=f"# stub change for {f}"))
         return {"code_changes": changes}
 
-    changes = apply_plan(
-        task=state["task"],
-        analysis=state.get("analysis", ""),
-        plan=state.get("plan", []),
-        workflow_id=state.get("workflow_id"),
-    )
+    try:
+        assert_within(state)
+        changes = apply_plan(
+            task=state["task"],
+            analysis=state.get("analysis", ""),
+            plan=state.get("plan", []),
+            workflow_id=state.get("workflow_id"),
+        )
+    except BudgetExceeded as e:
+        return _bb(e, "do_code")
     return {"code_changes": list(changes)}
 
 
@@ -231,7 +235,10 @@ def review_node(state: GraphState) -> Dict[str, Any]:
         "which files were touched, whether tests passed, and any risk worth a second look. "
         "No emoji, no marketing tone."
     )
-    summary = _chat("review", system, summary_input, workflow_id=wf)
+    try:
+        summary = _chat("review", system, summary_input, workflow_id=wf, state=state)
+    except BudgetExceeded as e:
+        return _bb(e, "do_review")
     try:
         memory_store.add(
             f"TASK: {state.get('task')}\nSUMMARY: {summary}",

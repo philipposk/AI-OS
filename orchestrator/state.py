@@ -54,3 +54,12 @@ class GraphState(TypedDict, total=False):
     # Debug / observability
     history: Annotated[list, add_messages]
     error: Optional[str]
+
+    # Phase U: budgets / circuit breaker
+    # Set by `nodes._bb()` when an LLM call would push past a ceiling. The
+    # graph routes any state with a truthy `budget_blocked` to
+    # `checkpoint_budget`. Cleared by the checkpoint on approval/abort.
+    budget_blocked: Optional[dict]   # {"scope", "current", "limit", "next"}
+    # Per-workflow override of $WORKFLOW_BUDGET_USD, raised by the human
+    # when they approve "raise ceiling" at the budget checkpoint.
+    budget_ceiling_usd: Optional[float]

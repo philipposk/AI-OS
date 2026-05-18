@@ -71,6 +71,21 @@ def _parse_model_id(model_id: str) -> tuple[str | None, str]:
     return MODEL_PROVIDER_HINT.get(model_id), model_id
 
 
+def _is_hard_failure(e: BaseException) -> bool:
+    """Auth/config errors trip the breaker immediately; rate limits and 5xx don't."""
+    import requests as _r
+    if isinstance(e, _r.exceptions.HTTPError):
+        status = e.response.status_code if e.response is not None else 0
+        if status in (401, 403):
+            return True
+        # 429 / 5xx are transient — don't trip the breaker hard.
+        return False
+    if isinstance(e, ProviderUnavailable):
+        # Missing creds = hard
+        return True
+    return False
+
+
 class ModelRouter:
     def __init__(self, providers: Optional[Dict[str, BaseProvider]] = None):
         if providers is None:
@@ -84,10 +99,15 @@ class ModelRouter:
         self.providers = providers
 
     def available_providers(self) -> List[str]:
-        return [name for name, p in self.providers.items() if p.is_available()]
+        from .circuit import get_breaker
+        bk = get_breaker()
+        return [name for name, p in self.providers.items() if p.is_available() and not bk.is_open(name)]
 
     def resolve(self, task_type: str, override_model: str | None = None) -> tuple[str, str]:
-        """Return (provider_name, model). Picks the first available in fallback chain."""
+        """Return (provider_name, model). Picks the first available in fallback chain.
+        Providers whose circuit breaker is open are skipped automatically."""
+        from .circuit import get_breaker
+        bk = get_breaker()
         model_id = override_model or os.getenv(
             f"ROUTER_MODEL_{task_type.upper()}",
             DEFAULT_TASK_MODELS.get(task_type, DEFAULT_TASK_MODELS["simple"]),
@@ -96,7 +116,7 @@ class ModelRouter:
         order = ([hinted] if hinted else []) + [p for p in DEFAULT_PROVIDER_ORDER if p != hinted]
         for name in order:
             prov = self.providers.get(name)
-            if prov and prov.is_available():
+            if prov and prov.is_available() and not bk.is_open(name):
                 # If the bare model id was Anthropic-specific but we fell back to
                 # another provider, use that provider's default model.
                 if name != hinted and hinted is not None:
@@ -104,7 +124,8 @@ class ModelRouter:
                 return name, model
         raise ProviderUnavailable(
             f"No provider available for task_type={task_type}. "
-            f"Tried: {order}. Set at least one API key in .env."
+            f"Tried: {order}. Set at least one API key in .env, or wait for the "
+            f"circuit breaker cooldown."
         )
 
     def chat(
@@ -116,10 +137,18 @@ class ModelRouter:
         temperature: float = 0.7,
         workflow_id: str | None = None,
     ) -> ChatResult:
+        from .circuit import get_breaker
+        bk = get_breaker()
         provider_name, resolved_model = self.resolve(task_type, model)
         provider = self.providers[provider_name]
         logger.info("router.chat task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
-        result = provider.chat(messages, resolved_model, max_tokens=max_tokens, temperature=temperature)
+        try:
+            result = provider.chat(messages, resolved_model, max_tokens=max_tokens, temperature=temperature)
+        except Exception as e:  # noqa: BLE001
+            bk.record_failure(provider_name, type(e).__name__ + ": " + str(e)[:160],
+                              hard=_is_hard_failure(e))
+            raise
+        bk.record_success(provider_name)
         record_call(
             provider=result.provider,
             model=result.model,
@@ -140,15 +169,23 @@ class ModelRouter:
         workflow_id: str | None = None,
     ):
         """Yield text fragments; last yield is a ChatResult. Records accounting after the stream completes."""
+        from .circuit import get_breaker
+        bk = get_breaker()
         provider_name, resolved_model = self.resolve(task_type, model)
         provider = self.providers[provider_name]
         logger.info("router.chat_stream task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
         final: ChatResult | None = None
-        for item in provider.chat_stream(messages, resolved_model, max_tokens=max_tokens, temperature=temperature):
-            if isinstance(item, ChatResult):
-                final = item
-            else:
-                yield item
+        try:
+            for item in provider.chat_stream(messages, resolved_model, max_tokens=max_tokens, temperature=temperature):
+                if isinstance(item, ChatResult):
+                    final = item
+                else:
+                    yield item
+        except Exception as e:  # noqa: BLE001
+            bk.record_failure(provider_name, type(e).__name__ + ": " + str(e)[:160],
+                              hard=_is_hard_failure(e))
+            raise
+        bk.record_success(provider_name)
         if final is not None:
             record_call(
                 provider=final.provider,

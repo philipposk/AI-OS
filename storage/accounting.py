@@ -12,8 +12,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
-from router.costs import estimate_cost_usd
-
 from .db import connect
 
 _SCHEMA = """
@@ -59,6 +57,9 @@ def record(
     task_type: str = "unknown",
     workflow_id: Optional[str] = None,
 ) -> LedgerEntry:
+    # Lazy import to avoid the circular `storage.accounting → router.costs →
+    # router → storage.accounting` chain when tests import accounting first.
+    from router.costs import estimate_cost_usd
     entry = LedgerEntry(
         ts=datetime.now(timezone.utc).isoformat(),
         provider=provider,

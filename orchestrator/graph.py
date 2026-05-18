@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from .checkpoints import (
+    review_budget_checkpoint,
     review_code_checkpoint,
     review_commit_checkpoint,
     review_plan_checkpoint,
@@ -24,6 +25,26 @@ from .nodes import (
 from .state import GraphState
 
 MAX_TEST_RETRIES = 3
+
+
+def _budget_or(passthrough: str):
+    """Phase U: if the previous node tripped a budget, divert to the budget
+    checkpoint; otherwise stay on the canonical edge. Used as the condition
+    function for every LLM-producing node.
+    """
+    def _route(state: GraphState) -> str:
+        return "checkpoint_budget" if state.get("budget_blocked") else passthrough
+    return _route
+
+
+def _after_budget(state: GraphState) -> str:
+    """Resume from budget checkpoint back to whichever node was blocked,
+    or END if the human aborted.
+    """
+    if not state.get("approved"):
+        return END
+    blocked = state.get("budget_blocked") or {}
+    return blocked.get("next") or END
 
 
 def _after_plan_review(state: GraphState) -> str:
@@ -63,12 +84,19 @@ def build_graph(checkpointer: Optional[Any] = None):
     g.add_node("do_review", review_node)
     g.add_node("checkpoint_commit", review_commit_checkpoint)
     g.add_node("do_commit", commit_node)
+    g.add_node("checkpoint_budget", review_budget_checkpoint)
 
     g.add_edge(START, "do_analyze")
-    g.add_edge("do_analyze", "do_plan")
-    g.add_edge("do_plan", "checkpoint_plan")
+    # Each LLM-producing node routes through `_budget_or(canonical_next)` so a
+    # tripped budget short-circuits to checkpoint_budget; otherwise the node
+    # behaves exactly as before.
+    g.add_conditional_edges("do_analyze", _budget_or("do_plan"),
+                            {"do_plan": "do_plan", "checkpoint_budget": "checkpoint_budget"})
+    g.add_conditional_edges("do_plan", _budget_or("checkpoint_plan"),
+                            {"checkpoint_plan": "checkpoint_plan", "checkpoint_budget": "checkpoint_budget"})
     g.add_conditional_edges("checkpoint_plan", _after_plan_review, {"do_code": "do_code", END: END})
-    g.add_edge("do_code", "do_test")
+    g.add_conditional_edges("do_code", _budget_or("do_test"),
+                            {"do_test": "do_test", "checkpoint_budget": "checkpoint_budget"})
     g.add_edge("do_code_retry", "do_code")
     g.add_conditional_edges(
         "do_test",
@@ -76,9 +104,16 @@ def build_graph(checkpointer: Optional[Any] = None):
         {"do_review": "do_review", "do_code_retry": "do_code_retry", "checkpoint_code": "checkpoint_code"},
     )
     g.add_conditional_edges("checkpoint_code", _after_code_review, {"do_review": "do_review", END: END})
-    g.add_edge("do_review", "checkpoint_commit")
+    g.add_conditional_edges("do_review", _budget_or("checkpoint_commit"),
+                            {"checkpoint_commit": "checkpoint_commit", "checkpoint_budget": "checkpoint_budget"})
     g.add_conditional_edges("checkpoint_commit", _after_commit_review, {"do_commit": "do_commit", END: END})
     g.add_edge("do_commit", END)
+    g.add_conditional_edges(
+        "checkpoint_budget",
+        _after_budget,
+        {"do_analyze": "do_analyze", "do_plan": "do_plan", "do_code": "do_code",
+         "do_review": "do_review", END: END},
+    )
 
     return g.compile(checkpointer=checkpointer or MemorySaver())
 
