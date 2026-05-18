@@ -155,11 +155,20 @@ in CI.
   works with every provider in the table above, including free ones; less
   precise than tool-use for large multi-file edits. Revisit if quality is
   thin.
-- **Memory is FTS5 keyword search**, not embeddings. Good enough for
-  "remember what we did with this file yesterday"; swap `storage/memory.py`
-  for a ChromaDB- or pgvector-backed module if you need true semantic.
-- **Slack bot is a stub.** Wire it through `router` + `orchestrator.start`
-  the same way the CLI does.
+- **Memory** supports semantic search via Ollama (`nomic-embed-text`) or
+  `sentence-transformers` (`all-MiniLM-L6-v2`); falls back to FTS5
+  keyword search when neither is available. Choose with
+  `EMBEDDINGS_BACKEND={ollama|sentence-transformers|none}`. Use
+  `python cli.py memory backend` to inspect, `memory reembed` to
+  backfill old rows.
+- **Slack bot** — Socket Mode bot in [communication/slack.py](communication/slack.py).
+  `/ai-run <task>` starts a workflow in a thread; each checkpoint posts a
+  Block Kit message with Approve/Reject buttons. Run with:
+  ```
+  pip install slack-bolt slack-sdk
+  SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... \
+    python -m communication.slack
+  ```
 - **`pi-nvidia-nim` submodule was removed** — it targeted a different
   runtime (pi-coding-agent / TypeScript) and was never imported by the
   Python code.
