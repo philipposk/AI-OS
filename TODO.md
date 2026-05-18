@@ -66,4 +66,8 @@ out, not deleted, so the history of what was considered stays visible.
 
 ## In progress
 
-- [ ] Phase Q — Slack + Telegram screenshot + voice-note per checkpoint
+(none)
+
+## Done (additional)
+
+- [x] Phase Q — Slack + Telegram screenshot + voice-note per checkpoint (470e58f)
