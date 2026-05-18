@@ -136,6 +136,41 @@ ai_company/
 └── requirements.txt
 ```
 
+## OpenAI-compatible API shim
+
+`python -m api.server` exposes the router as a standard OpenAI chat-completions
+endpoint so any tool that speaks that wire format (LangChain, glass overlay,
+desktop assistants, plain `curl`) can use our free-tier rotation and
+accounting layer:
+
+```bash
+pip install fastapi 'uvicorn[standard]'
+python -m api.server                    # 127.0.0.1:8765 by default
+API_HOST=0.0.0.0 API_PORT=8765 \
+  API_COMPANY_TOKEN=mysecret \
+  python -m api.server                  # bind public, require Authorization: Bearer mysecret
+
+curl -s http://localhost:8765/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"simple","messages":[{"role":"user","content":"hi"}]}'
+```
+
+The `model` field accepts:
+- a task type: `analyze | plan | code | review | summarize | simple`
+- `provider:model_id` for an explicit pick (e.g. `groq:llama-3.3-70b-versatile`)
+- a bare provider name (uses that provider's default model)
+- any other string — the router will hint-resolve or fall back
+
+`stream:true` returns SSE in the OpenAI chunk format. `GET /v1/models` lists
+virtual models. `GET /v1/accounting` returns the current token+cost report
+(optionally filtered with `?workflow_id=…`).
+
+## Dashboard narration
+
+The Streamlit dashboard has a sidebar toggle **🔊 narrate workflow**. When on,
+each finished node's output is spoken aloud by the browser as the workflow
+runs. Plays nicely with the existing "🎙️ Voice chat" panel.
+
 ## Testing
 
 ```bash

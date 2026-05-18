@@ -51,6 +51,9 @@ def _init_state() -> None:
     st.session_state.setdefault("provider_override", None)
     st.session_state.setdefault("selected_model", "")
     st.session_state.setdefault("activity", [])
+    st.session_state.setdefault("narrate_on", False)
+    st.session_state.setdefault("narrate_queue", [])      # list[(node, text)]
+    st.session_state.setdefault("narrate_emitted", 0)     # cursor into narrate_queue
 
 
 def _config() -> dict:
@@ -76,8 +79,43 @@ def _drain(stream) -> None:
             return
         st.session_state.events.append(ev)
         st.session_state.activity.append(_format_event(ev))
+        if st.session_state.get("narrate_on"):
+            _queue_narration(ev)
     st.session_state.pending_interrupt = None
     st.session_state.finished = True
+
+
+def _queue_narration(ev: dict) -> None:
+    """Extract one short spoken summary per finished node. Skips empty payloads."""
+    for node, payload in ev.items():
+        if node == "__interrupt__" or not isinstance(payload, dict):
+            continue
+        text = _narration_for(node, payload)
+        if text:
+            st.session_state.narrate_queue.append((node, text))
+
+
+def _narration_for(node: str, payload: dict) -> str:
+    """Build a single-sentence-ish narration string for a node's state update."""
+    if node == "do_analyze" and payload.get("analysis"):
+        return f"Analysis. {payload['analysis'][:280]}"
+    if node == "do_plan" and payload.get("plan"):
+        steps = payload["plan"]
+        titles = ". ".join(s.get("title", "") for s in steps[:5] if s.get("title"))
+        return f"Plan ready. {len(steps)} step{'s' if len(steps) != 1 else ''}. {titles}"
+    if node == "do_code" and payload.get("code_changes"):
+        files = ", ".join(c.get("path", "") for c in payload["code_changes"] if c.get("path"))
+        return f"Code applied to {len(payload['code_changes'])} file{'s' if len(payload['code_changes']) != 1 else ''}. {files}"
+    if node == "do_test" and payload.get("test_results"):
+        tr = payload["test_results"]
+        return "Tests passed." if tr.get("passed") else "Tests failed."
+    if node == "do_review" and payload.get("review_summary"):
+        return f"Review. {payload['review_summary'][:280]}"
+    if node == "do_commit":
+        sha = payload.get("commit_sha")
+        if sha:
+            return f"Committed. sha {sha[:7]}."
+    return ""
 
 
 def _format_event(ev: dict) -> str:
@@ -140,6 +178,16 @@ def _sidebar() -> None:
         os.environ["ROUTER_MODEL_CODE"] = st.session_state.selected_model
         os.environ["ROUTER_MODEL_REVIEW"] = st.session_state.selected_model
 
+    st.sidebar.header("Narration")
+    st.session_state.narrate_on = st.sidebar.toggle(
+        "🔊 narrate workflow",
+        value=st.session_state.get("narrate_on", False),
+        help="Speak each node's output aloud as the workflow runs.",
+    )
+    if st.sidebar.button("🔇 clear narration queue"):
+        st.session_state.narrate_queue = []
+        st.session_state.narrate_emitted = 0
+
     st.sidebar.header("Accounting")
     rep = accounting_store.report(workflow_id=st.session_state.workflow_id)
     st.sidebar.metric("Calls (this workflow)", rep["total_calls"])
@@ -200,6 +248,25 @@ def _render_interrupt(payload: dict) -> None:
         st.rerun()
 
 
+def _render_narration() -> None:
+    """Speak any narration entries we haven't read aloud yet (queued, not cancelled)."""
+    if not st.session_state.get("narrate_on"):
+        return
+    queue = st.session_state.get("narrate_queue") or []
+    emitted = st.session_state.get("narrate_emitted", 0)
+    if emitted >= len(queue):
+        return
+    import streamlit.components.v1 as _components
+    new_items = queue[emitted:]
+    for node, text in new_items:
+        _components.html(_speak_html(text, cancel=False), height=0)
+    st.session_state.narrate_emitted = len(queue)
+    # Show a compact log of what was just narrated
+    with st.expander(f"🔊 narrated {len(new_items)} new event(s)"):
+        for node, text in new_items:
+            st.write(f"**{node}** — {text}")
+
+
 def _render_streaming() -> None:
     """Live token feed grouped by node, while the workflow is mid-flight."""
     buf = st.session_state.get("stream_buf") or {}
@@ -230,9 +297,14 @@ def _render_timeline() -> None:
                             st.write(f"**{k}**: {v}")
 
 
-def _speak_html(text: str, *, rate: float = 1.0, pitch: float = 1.0, voice_hint: str = "") -> str:
+def _speak_html(text: str, *, rate: float = 1.0, pitch: float = 1.0, voice_hint: str = "", cancel: bool = True) -> str:
     """Build a tiny self-contained HTML snippet that speaks `text` via the browser's
-    SpeechSynthesis API. Embeds the text safely as a JSON-escaped string."""
+    SpeechSynthesis API. Embeds the text safely as a JSON-escaped string.
+
+    `cancel=True` (default) stops any current utterance before speaking — right for
+    voice quick-chat. `cancel=False` queues onto the existing playlist — right for
+    workflow narration that should read out every node in order.
+    """
     import html as _html
     import json as _json
     # JSON-encode AND escape `</` so a malicious "</script>" inside text can't
@@ -242,6 +314,7 @@ def _speak_html(text: str, *, rate: float = 1.0, pitch: float = 1.0, voice_hint:
         return _json.dumps(s).replace("</", "<\\/")
     safe = _safe_js(text)
     voice_filter = _safe_js(voice_hint.lower())
+    cancel_js = "speechSynthesis.cancel();" if cancel else ""
     return f"""
     <script>
     (function() {{
@@ -256,7 +329,7 @@ def _speak_html(text: str, *, rate: float = 1.0, pitch: float = 1.0, voice_hint:
             const m = voices.find(v => (v.name + ' ' + v.lang).toLowerCase().includes(want));
             if (m) u.voice = m;
           }}
-          speechSynthesis.cancel();
+          {cancel_js}
           speechSynthesis.speak(u);
         }};
         if (speechSynthesis.getVoices().length) pickVoice();
@@ -422,7 +495,8 @@ def main() -> None:
         _start_workflow(task)
         st.rerun()
     if cols[1].button("Reset", disabled=st.session_state.workflow_id is None):
-        for k in ("workflow_id", "events", "pending_interrupt", "finished", "activity"):
+        for k in ("workflow_id", "events", "pending_interrupt", "finished", "activity",
+                  "narrate_queue", "narrate_emitted", "stream_buf"):
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -432,6 +506,7 @@ def main() -> None:
     if st.session_state.pending_interrupt:
         _render_interrupt(st.session_state.pending_interrupt)
 
+    _render_narration()
     _render_streaming()
     _render_timeline()
 
