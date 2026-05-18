@@ -64,11 +64,32 @@ def analyze_node(state: GraphState) -> Dict[str, Any]:
     except Exception as e:  # storage hiccup shouldn't kill the workflow
         logger.warning("memory.search failed: %s", e)
         related = []
-    extra = ""
+    extra_parts: list[str] = []
     if related:
-        extra = "\n\nRelated past notes (most relevant first):\n" + "\n---\n".join(
-            d.text[:600] for d in related
-        )
+        extra_parts.append("Related past notes:\n" + "\n---\n".join(d.text[:600] for d in related))
+    # Pull a few vault hits too if Obsidian is configured.
+    try:
+        from storage import obsidian as _obs
+        vault_hits = _obs.search_vault(task, limit=3)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("obsidian.search_vault failed: %s", e)
+        vault_hits = []
+    if vault_hits:
+        extra_parts.append("Related vault notes:\n" + "\n---\n".join(
+            f"[{h['path']}] {h['snippet']}" for h in vault_hits
+        ))
+    # Phase R: if the task mentions a GitHub issue/PR (`#123` or URL), pull its
+    # body via `gh` and inject as analyst context. Fails silently if `gh` is
+    # missing or the ref doesn't resolve.
+    try:
+        from tools.git_ops import gh_context_for_task
+        gh_block = gh_context_for_task(task)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gh_context_for_task failed: %s", e)
+        gh_block = ""
+    if gh_block:
+        extra_parts.append("Related GitHub items:\n" + gh_block)
+    extra = ("\n\n" + "\n\n".join(extra_parts)) if extra_parts else ""
     system = (
         "You are a senior engineer breaking down an incoming task. In <=120 words, "
         "describe what the user is trying to accomplish, the likely files/areas involved, "

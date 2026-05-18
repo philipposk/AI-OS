@@ -140,6 +140,33 @@ def cmd_queue(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_obsidian(args: argparse.Namespace) -> int:
+    from storage import obsidian as obs
+    if args.obsidian_cmd == "status":
+        root = obs.vault_root()
+        if root is None:
+            print("vault: disabled (set OBSIDIAN_VAULT_PATH to enable)")
+            return 0
+        print(f"vault: {root}")
+        sub = root / "ai_company"
+        count = sum(1 for _ in sub.rglob("*.md")) if sub.exists() else 0
+        print(f"mirrored notes: {count}")
+        return 0
+    if args.obsidian_cmd == "export":
+        n = obs.bulk_export()
+        print(f"exported {n} note(s) to vault")
+        return 0
+    if args.obsidian_cmd == "search":
+        hits = obs.search_vault(args.query, limit=args.limit)
+        if not hits:
+            print("(no matches)")
+        for h in hits:
+            print(f"score={h['score']}  {h['path']}")
+            print(f"  {h['snippet']}")
+        return 0
+    return 2
+
+
 def cmd_voice(args: argparse.Namespace) -> int:
     from router.transcription import get_transcriber
 
@@ -269,6 +296,15 @@ def build_parser() -> argparse.ArgumentParser:
     vtrans.add_argument("path", help="Path to audio file (webm/mp3/wav/m4a/ogg)")
     vtrans.add_argument("--language", default=None, help="ISO language code (auto-detect if omitted)")
     v.set_defaults(func=cmd_voice)
+
+    o = sub.add_parser("obsidian", help="Obsidian vault mirror utilities")
+    osub = o.add_subparsers(dest="obsidian_cmd", required=True)
+    osub.add_parser("status", help="Show vault path + counts")
+    osub.add_parser("export", help="Mirror every memory_docs row into the vault")
+    osearch = osub.add_parser("search", help="Substring search across the vault")
+    osearch.add_argument("query")
+    osearch.add_argument("--limit", type=int, default=10)
+    o.set_defaults(func=cmd_obsidian)
     return p
 
 

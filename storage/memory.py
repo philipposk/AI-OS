@@ -119,14 +119,25 @@ def add(text: str, *, kind: str = "note", workflow_id: Optional[str] = None, met
         except Exception as e:  # noqa: BLE001
             logger.warning("memory.add: embedder failed (%s); storing without embedding", e)
 
+    now = _now()
     with connect() as conn:
         _ensure(conn)
         cur = conn.execute(
             "INSERT INTO memory_docs (kind, workflow_id, meta, text, created_at, embedding, embedding_model) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (kind, workflow_id, json.dumps(meta or {}), text, _now(), emb_blob, emb_model),
+            (kind, workflow_id, json.dumps(meta or {}), text, now, emb_blob, emb_model),
         )
-        return cur.fetchone()["id"]
+        doc_id = cur.fetchone()["id"]
+
+    # Best-effort: mirror to Obsidian vault if configured.
+    try:
+        from . import obsidian as _obs
+        _obs.mirror_note(doc_id=doc_id, kind=kind, text=text, workflow_id=workflow_id,
+                         meta=meta or {}, created_at=now)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory.add: obsidian mirror failed (%s); row still saved to db", e)
+
+    return doc_id
 
 
 def _quote_fts(query: str) -> str:
