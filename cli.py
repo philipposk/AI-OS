@@ -116,7 +116,40 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"  - {p}")
         return 1
     print("All checks passed.")
+    if getattr(args, "live", False):
+        _live_smoke_test(r)
     return 0
+
+
+def _live_smoke_test(router: ModelRouter) -> None:
+    """Phase T: 1-token "hi" round-trip per available provider.
+
+    Diagnostic-only. Cost ~$0 because completions are capped at 1 token.
+    Failures print FAIL but do not flip the exit code — this is a smoke test,
+    not a gate.
+    """
+    import time
+
+    print("\nLive provider smoke test (1-token hello each):")
+    for name, prov in router.providers.items():
+        if not prov.is_available():
+            print(f"  {name:11s} SKIP (no credentials)")
+            continue
+        model = prov.default_model()
+        t0 = time.perf_counter()
+        try:
+            res = prov.chat(
+                [{"role": "user", "content": "hi"}],
+                model=model,
+                max_tokens=1,
+                temperature=0.0,
+            )
+            dt = (time.perf_counter() - t0) * 1000
+            print(f"  {name:11s} OK   {dt:6.0f}ms  model={model}  in={res.prompt_tokens} out={res.completion_tokens}")
+        except Exception as e:  # noqa: BLE001
+            dt = (time.perf_counter() - t0) * 1000
+            msg = str(e).splitlines()[0][:160]
+            print(f"  {name:11s} FAIL {dt:6.0f}ms  model={model}  err={msg}")
 
 
 def cmd_queue(args: argparse.Namespace) -> int:
@@ -256,7 +289,10 @@ def build_parser() -> argparse.ArgumentParser:
     acc = sub.add_parser("accounting", help="Print accounting summary")
     acc.add_argument("--json", action="store_true")
     acc.set_defaults(func=cmd_accounting)
-    sub.add_parser("check", help="Sanity-check the install").set_defaults(func=cmd_check)
+    chk = sub.add_parser("check", help="Sanity-check the install")
+    chk.add_argument("--live", action="store_true",
+                     help="Also send a 1-token hello to each available provider (diagnostic).")
+    chk.set_defaults(func=cmd_check)
 
     q = sub.add_parser("queue", help="Task queue ops")
     qsub = q.add_subparsers(dest="queue_cmd", required=True)
