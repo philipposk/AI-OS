@@ -11,6 +11,7 @@ from router import ModelRouter
 from router.base import Message
 from storage import memory as memory_store
 
+from .budget import BudgetExceeded, assert_within
 from .state import CodeChange, GraphState, PlanStep, TestResult
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,16 @@ logger = logging.getLogger(__name__)
 _router = ModelRouter()
 
 
-def _chat(task_type: str, system: str, user: str, *, workflow_id: str | None = None) -> str:
+def _chat(task_type: str, system: str, user: str, *, workflow_id: str | None = None,
+          state: Dict[str, Any] | None = None) -> str:
+    # Phase U: refuse to spend if a budget ceiling is already past. We check
+    # BEFORE the call rather than after so we never make the offending
+    # request. The caller catches BudgetExceeded and routes to the budget
+    # checkpoint.
+    if state is not None:
+        assert_within(state)
+    elif workflow_id:
+        assert_within({"workflow_id": workflow_id})
     messages: List[Message] = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -53,6 +63,11 @@ def _get_stream_writer():
 
 
 # ---------- nodes ----------
+
+
+def _bb(exc: BudgetExceeded, next_node: str) -> Dict[str, Any]:
+    """Build the state delta the graph routes on when a budget trips."""
+    return {"budget_blocked": {**exc.to_dict(), "next": next_node}}
 
 
 def analyze_node(state: GraphState) -> Dict[str, Any]:
@@ -95,7 +110,10 @@ def analyze_node(state: GraphState) -> Dict[str, Any]:
         "describe what the user is trying to accomplish, the likely files/areas involved, "
         "and the most important risks or unknowns. Be specific."
     )
-    analysis = _chat("analyze", system, f"Task: {task}{extra}", workflow_id=wf)
+    try:
+        analysis = _chat("analyze", system, f"Task: {task}{extra}", workflow_id=wf, state=state)
+    except BudgetExceeded as e:
+        return _bb(e, "do_analyze")
     try:
         memory_store.add(
             f"TASK: {task}\nANALYSIS: {analysis}",
@@ -130,7 +148,10 @@ def _extract_json_array(text: str) -> list:
 def plan_node(state: GraphState) -> Dict[str, Any]:
     wf = state.get("workflow_id")
     user = f"Task: {state['task']}\n\nContext from analysis:\n{state.get('analysis', '')}"
-    raw = _chat("plan", _PLAN_SYSTEM, user, workflow_id=wf)
+    try:
+        raw = _chat("plan", _PLAN_SYSTEM, user, workflow_id=wf, state=state)
+    except BudgetExceeded as e:
+        return _bb(e, "do_plan")
     try:
         steps_raw = _extract_json_array(raw)
     except Exception as e:

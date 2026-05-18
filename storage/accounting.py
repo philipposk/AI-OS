@@ -110,6 +110,25 @@ def iter_entries(workflow_id: Optional[str] = None) -> Iterable[LedgerEntry]:
             )
 
 
+def workflow_cost(workflow_id: str) -> float:
+    """Sum cost_usd for one workflow. Phase U: feeds the budget circuit breaker."""
+    with connect() as conn:
+        _ensure(conn)
+        row = conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS s FROM ledger WHERE workflow_id=?",
+            (workflow_id,),
+        ).fetchone()
+    return float(row["s"]) if row else 0.0
+
+
+def total_cost() -> float:
+    """Sum cost_usd across all workflows ever. Phase U: feeds the global budget."""
+    with connect() as conn:
+        _ensure(conn)
+        row = conn.execute("SELECT COALESCE(SUM(cost_usd), 0.0) AS s FROM ledger").fetchone()
+    return float(row["s"]) if row else 0.0
+
+
 def report(workflow_id: Optional[str] = None) -> dict:
     by_provider: dict[str, dict] = {}
     total_cost = 0.0

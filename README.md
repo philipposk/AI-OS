@@ -103,6 +103,23 @@ docker compose up --build
 # dashboard on http://localhost:8501, ollama on http://localhost:11434
 ```
 
+## Obsidian integration
+
+Two-way:
+
+- **Vault → ai_company.** Set `OBSIDIAN_VAULT_PATH=...`; every workflow's
+  analyze node automatically searches your vault for relevant notes and
+  injects the top hits as context. `memory.add()` mirrors all stored
+  notes into `<vault>/ai_company/<workflow_id>/<id-slug>.md` with YAML
+  frontmatter.
+- **ai_company → Obsidian Copilot.** Point the
+  [logancyang/obsidian-copilot](https://github.com/logancyang/obsidian-copilot)
+  plugin at the FastAPI shim (`http://localhost:8765/v1`). Chats from
+  inside Obsidian then flow through our free-tier rotation +
+  accounting. Step-by-step: [docs/obsidian-copilot-setup.md](docs/obsidian-copilot-setup.md).
+
+CLI helpers: `cli.py obsidian status | export | search "<query>"`.
+
 ## Repository layout
 
 ```
