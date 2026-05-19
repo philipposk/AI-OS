@@ -70,5 +70,11 @@ out, not deleted, so the history of what was considered stays visible.
 ## Done (additional)
 
 - [x] Phase Q — Slack + Telegram screenshot + voice-note per checkpoint (470e58f)
-- [x] Phase R — Obsidian vault mirror + gh PR/issue wrappers in tools/git_ops (21b2fe4)
-- [x] Phase S — Dashboard git panel (recent commits + revert + PR/issue fetch) (965cda8)
+- [x] Phase R — Obsidian vault mirror + gh PR/issue wrappers (21b2fe4)
+- [x] Phase S — Dashboard git panel (recent commits + revert + PR/issue) (965cda8)
+- [x] Phase T — cli.py check --live smoke (0ff0bdd / f0bb5d8)
+- [x] Phase U — Obsidian-copilot setup docs (f0bb5d8)
+- [x] Phase V — Cost budgets + per-provider circuit breaker (07b9057)
+- [x] Phase W — Web search cascade (Brave/Serper/Tavily/DDG) (c7039aa)
+- [x] Phase X — Multi-agent crew (Planner/Critic with bus) (linter commit)
+- [x] Phase Y — Multi-cloud Terraform: AWS/GCP/Azure/Hetzner/DO + Oracle (b0ef172)
