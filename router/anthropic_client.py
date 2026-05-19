@@ -42,11 +42,17 @@ class AnthropicClient(BaseProvider):
     ) -> ChatResult:
         if not self.is_available():
             raise ProviderUnavailable("ANTHROPIC_API_KEY not set")
+        from .vision import to_anthropic
+        translated = to_anthropic(messages)
         system = None
         anth_msgs = []
-        for m in messages:
+        for m in translated:
             if m["role"] == "system":
-                system = m["content"] if system is None else f"{system}\n\n{m['content']}"
+                # System content must be plain string for the SDK.
+                sys_text = m["content"] if isinstance(m["content"], str) else "".join(
+                    b.get("text", "") for b in m["content"] if isinstance(b, dict) and b.get("type") == "text"
+                )
+                system = sys_text if system is None else f"{system}\n\n{sys_text}"
             else:
                 anth_msgs.append({"role": m["role"], "content": m["content"]})
         kwargs = dict(
@@ -71,11 +77,17 @@ class AnthropicClient(BaseProvider):
     def chat_stream(self, messages, model, max_tokens=1024, temperature=0.7):
         if not self.is_available():
             raise ProviderUnavailable("ANTHROPIC_API_KEY not set")
+        from .vision import to_anthropic
+        translated = to_anthropic(messages)
         system = None
         anth_msgs = []
-        for m in messages:
+        for m in translated:
             if m["role"] == "system":
-                system = m["content"] if system is None else f"{system}\n\n{m['content']}"
+                # System content must be plain string for the SDK.
+                sys_text = m["content"] if isinstance(m["content"], str) else "".join(
+                    b.get("text", "") for b in m["content"] if isinstance(b, dict) and b.get("type") == "text"
+                )
+                system = sys_text if system is None else f"{system}\n\n{sys_text}"
             else:
                 anth_msgs.append({"role": m["role"], "content": m["content"]})
         kwargs = dict(model=model, max_tokens=max_tokens, temperature=temperature, messages=anth_msgs)

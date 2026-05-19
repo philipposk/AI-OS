@@ -7,7 +7,12 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 class Message(TypedDict):
     role: str
-    content: str
+    # str for plain text. list[dict] for OpenAI-shape content blocks supporting
+    # vision (each block is {"type":"text","text":...} or
+    # {"type":"image_url","image_url":{"url": "data:image/png;base64,..." | "https://..."}}).
+    # Only Anthropic + OpenRouter handle the block form today; the others
+    # strip blocks to their text portions in the router.
+    content: Any  # str | list[dict]
 
 
 @dataclass

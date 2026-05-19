@@ -103,10 +103,13 @@ class ModelRouter:
         bk = get_breaker()
         return [name for name, p in self.providers.items() if p.is_available() and not bk.is_open(name)]
 
-    def resolve(self, task_type: str, override_model: str | None = None) -> tuple[str, str]:
+    def resolve(self, task_type: str, override_model: str | None = None,
+                *, require_vision: bool = False) -> tuple[str, str]:
         """Return (provider_name, model). Picks the first available in fallback chain.
-        Providers whose circuit breaker is open are skipped automatically."""
+        Providers whose circuit breaker is open are skipped automatically.
+        `require_vision=True` restricts the search to vision-capable providers."""
         from .circuit import get_breaker
+        from .vision import VISION_CAPABLE
         bk = get_breaker()
         model_id = override_model or os.getenv(
             f"ROUTER_MODEL_{task_type.upper()}",
@@ -115,6 +118,8 @@ class ModelRouter:
         hinted, model = _parse_model_id(model_id)
         order = ([hinted] if hinted else []) + [p for p in DEFAULT_PROVIDER_ORDER if p != hinted]
         for name in order:
+            if require_vision and name not in VISION_CAPABLE:
+                continue
             prov = self.providers.get(name)
             if prov and prov.is_available() and not bk.is_open(name):
                 # If the bare model id was Anthropic-specific but we fell back to
@@ -122,8 +127,9 @@ class ModelRouter:
                 if name != hinted and hinted is not None:
                     model = prov.default_model()
                 return name, model
+        which = "vision-capable " if require_vision else ""
         raise ProviderUnavailable(
-            f"No provider available for task_type={task_type}. "
+            f"No {which}provider available for task_type={task_type}. "
             f"Tried: {order}. Set at least one API key in .env, or wait for the "
             f"circuit breaker cooldown."
         )
@@ -138,8 +144,17 @@ class ModelRouter:
         workflow_id: str | None = None,
     ) -> ChatResult:
         from .circuit import get_breaker
+        from .vision import VISION_CAPABLE, has_images, text_only
         bk = get_breaker()
-        provider_name, resolved_model = self.resolve(task_type, model)
+        needs_vision = has_images(messages)
+        provider_name, resolved_model = self.resolve(task_type, model,
+                                                     require_vision=needs_vision)
+        if needs_vision and provider_name not in VISION_CAPABLE:
+            # Defensive: resolver returned non-vision provider — strip images.
+            messages = text_only(messages)
+        elif not needs_vision and not isinstance(messages[0].get("content"), str):
+            # Some callers pass block-form content with text-only. Flatten.
+            messages = text_only(messages)
         provider = self.providers[provider_name]
         logger.info("router.chat task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
         try:
@@ -170,8 +185,15 @@ class ModelRouter:
     ):
         """Yield text fragments; last yield is a ChatResult. Records accounting after the stream completes."""
         from .circuit import get_breaker
+        from .vision import VISION_CAPABLE, has_images, text_only
         bk = get_breaker()
-        provider_name, resolved_model = self.resolve(task_type, model)
+        needs_vision = has_images(messages)
+        provider_name, resolved_model = self.resolve(task_type, model,
+                                                     require_vision=needs_vision)
+        if needs_vision and provider_name not in VISION_CAPABLE:
+            messages = text_only(messages)
+        elif not needs_vision and messages and not isinstance(messages[0].get("content"), str):
+            messages = text_only(messages)
         provider = self.providers[provider_name]
         logger.info("router.chat_stream task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
         final: ChatResult | None = None
