@@ -1,0 +1,10 @@
+region              = "eu-west-1"
+instance_type       = "t4g.small"   # ARM (matches cloud-init's python3.11 path)
+disk_size_gb        = 30
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Keep false; tunnel via SSH.
+expose_streamlit_publicly = false
+
+repo_url    = "https://github.com/philipposk/AI-OS.git"
+repo_branch = "main"

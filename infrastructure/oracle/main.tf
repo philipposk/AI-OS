@@ -128,7 +128,7 @@ resource "oci_core_instance" "ai_worker" {
 
   metadata = {
     ssh_authorized_keys = file(var.ssh_public_key_path)
-    user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
+    user_data = base64encode(templatefile("${path.module}/../modules/cloud-init.yaml", {
       repo_url    = var.repo_url
       repo_branch = var.repo_branch
     }))

@@ -1,0 +1,9 @@
+do_token            = "your-digitalocean-api-token"
+region              = "ams3"           # nyc1/3, sfo3, ams3, fra1, sgp1, syd1, lon1, tor1, blr1
+droplet_size        = "s-1vcpu-2gb"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+expose_streamlit_publicly = false
+
+repo_url    = "https://github.com/philipposk/AI-OS.git"
+repo_branch = "main"

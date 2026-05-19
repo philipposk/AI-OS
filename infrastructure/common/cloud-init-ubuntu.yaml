@@ -1,0 +1,64 @@
+#cloud-config
+# Ubuntu / Debian variant of the Oracle cloud-init. Used by AWS, GCP, Azure,
+# Hetzner, DigitalOcean modules. Templated by Terraform with:
+#   ${repo_url}    git URL to clone
+#   ${repo_branch} branch to deploy
+#   ${user}        login user (ubuntu / azureuser / root depending on cloud)
+package_update: true
+package_upgrade: false
+packages:
+  - git
+  - python3
+  - python3-venv
+  - python3-pip
+  - sqlite3
+  - ufw
+
+write_files:
+  - path: /etc/systemd/system/ai-company.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=ai_company Streamlit dashboard
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=${user}
+      WorkingDirectory=/opt/ai-company
+      EnvironmentFile=-/opt/ai-company/.env
+      ExecStart=/opt/ai-company/.venv/bin/streamlit run ui/dashboard.py \
+        --server.headless true \
+        --server.port 8501 \
+        --browser.gatherUsageStats false
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/ai-company-update.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -e
+      cd /opt/ai-company
+      git fetch --all --prune
+      git reset --hard origin/${repo_branch}
+      ./.venv/bin/pip install --quiet --upgrade pip
+      ./.venv/bin/pip install --quiet -r requirements.txt
+      systemctl restart ai-company
+
+runcmd:
+  - ufw allow 22/tcp || true
+  - ufw allow 8501/tcp || true
+  - ufw --force enable || true
+  - install -d -o ${user} -g ${user} /opt/ai-company
+  - sudo -u ${user} git clone --branch ${repo_branch} ${repo_url} /opt/ai-company
+  - sudo -u ${user} python3 -m venv /opt/ai-company/.venv
+  - sudo -u ${user} /opt/ai-company/.venv/bin/pip install --upgrade pip
+  - sudo -u ${user} /opt/ai-company/.venv/bin/pip install -r /opt/ai-company/requirements.txt
+  - install -m 600 -o ${user} -g ${user} /dev/null /opt/ai-company/.env
+  - systemctl daemon-reload
+  - systemctl enable --now ai-company.service

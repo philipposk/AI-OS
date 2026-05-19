@@ -1,0 +1,11 @@
+project_id          = "my-gcp-project"
+region              = "europe-west2"
+zone                = "europe-west2-a"
+machine_type        = "t2a-standard-1"
+disk_size_gb        = 30
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+expose_streamlit_publicly = false
+
+repo_url    = "https://github.com/philipposk/AI-OS.git"
+repo_branch = "main"

@@ -1,0 +1,10 @@
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "westeurope"
+vm_size             = "Standard_D2pls_v5"
+disk_size_gb        = 30
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+expose_streamlit_publicly = false
+
+repo_url    = "https://github.com/philipposk/AI-OS.git"
+repo_branch = "main"
