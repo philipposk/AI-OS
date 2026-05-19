@@ -106,9 +106,11 @@ def analyze_node(state: GraphState) -> Dict[str, Any]:
         extra_parts.append("Related GitHub items:\n" + gh_block)
     extra = ("\n\n" + "\n\n".join(extra_parts)) if extra_parts else ""
     system = (
-        "You are a senior engineer breaking down an incoming task. In <=120 words, "
-        "describe what the user is trying to accomplish, the likely files/areas involved, "
-        "and the most important risks or unknowns. Be specific."
+        "You are a senior engineer triaging a task before the planner sees it. "
+        "Output <=100 words covering: (1) WHAT the user wants, (2) likely "
+        "files/modules to touch, (3) the ONE risk that matters most. Skip "
+        "filler like 'this is straightforward' or 'careful review needed'. "
+        "If a risk is genuinely low, say so in 5 words and move on."
     )
     try:
         analysis = _chat("analyze", system, f"Task: {task}{extra}", workflow_id=wf, state=state)
@@ -128,9 +130,21 @@ def analyze_node(state: GraphState) -> Dict[str, Any]:
 
 _PLAN_SYSTEM = (
     "You are planning a small, reviewable code change. Output STRICT JSON only — "
-    "an array of 1-5 step objects. Each object has `title` (<=80 chars), `detail` "
-    "(1-2 sentences), and `files` (array of relative paths the step will touch; "
-    "empty if no file is touched yet). Do not include code, prose, or markdown."
+    "an array of step objects. Each object has `title` (<=80 chars, imperative "
+    "voice — verb first), `detail` (1-2 sentences explaining WHY/HOW, not what "
+    "the title already says), and `files` (relative paths the step will touch; "
+    "[] if no file is touched yet).\n\n"
+    "Step-count guidance:\n"
+    "  - trivial 1-file edits (rename, docstring, comment, single-line fix): 1 step\n"
+    "  - small features touching 1-2 files: 2-3 steps\n"
+    "  - larger features: up to 5 steps\n"
+    "  - hard cap: 5 steps\n\n"
+    "FORBIDDEN steps (do NOT emit these — they are noise):\n"
+    "  - 'Review requirements' / 'Identify approach' / 'Plan the implementation' (you ARE the plan)\n"
+    "  - 'Open the file' / 'Locate the function' (the editor will do this)\n"
+    "  - 'Verify accuracy' / 'Review for syntax errors' (the test step handles this)\n"
+    "  - 'Commit changes' (the commit step handles this)\n\n"
+    "Every step must actually change something concrete. No code, no prose, no markdown — JSON only."
 )
 
 
@@ -318,9 +332,10 @@ def review_node(state: GraphState) -> Dict[str, Any]:
             indent=2,
         )
         system = (
-            "Summarise the change in <=80 words for a human reviewer. State what changed, "
-            "which files were touched, whether tests passed, and any risk worth a second look. "
-            "No emoji, no marketing tone."
+            "Summarise the change in <=60 words for a human reviewer about to "
+            "click approve. State exactly what the diff does, which files moved, "
+            "and one residual risk worth a second look — or 'no residual risk' "
+            "if genuinely none. No emoji, no marketing, no recap of the plan."
         )
         try:
             summary = _chat("review", system, summary_input, workflow_id=wf, state=state)
