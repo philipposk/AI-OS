@@ -209,7 +209,126 @@ def build_app():
         wid = action["value"]
         dispatcher.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by <@{body['user']['id']}>"})
 
+    # ---------- passive ticket detector ----------
+    # Listens to channel messages, asks the LLM whether each looks like a
+    # coding task, posts a confirmation prompt before starting a workflow.
+    # Activation:
+    #   SLACK_AUTO_CHANNELS=C0123,C0456   comma-sep channel IDs we should
+    #                                     auto-scan (without needing a mention)
+    #   SLACK_AUTO_MENTIONS_ALWAYS=true   in any channel the bot is mentioned in,
+    #                                     classify the message even if the channel
+    #                                     is not on the allowlist
+    auto_channels = {
+        c.strip() for c in (os.getenv("SLACK_AUTO_CHANNELS", "").split(","))
+        if c.strip()
+    }
+    mentions_always = os.getenv("SLACK_AUTO_MENTIONS_ALWAYS", "true").lower() in ("1", "true", "yes", "on")
+
+    bot_user_id_holder: dict[str, str] = {}
+
+    def _bot_user_id() -> str:
+        if "v" not in bot_user_id_holder:
+            try:
+                bot_user_id_holder["v"] = app.client.auth_test()["user_id"]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("auth_test failed: %s", e)
+                bot_user_id_holder["v"] = ""
+        return bot_user_id_holder["v"]
+
+    def _should_scan(event: dict) -> bool:
+        # Skip bot/system messages, edits, thread replies.
+        if event.get("subtype") in ("bot_message", "message_changed", "message_deleted",
+                                    "channel_join", "channel_leave"):
+            return False
+        if event.get("bot_id"):
+            return False
+        if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+            return False
+        text = (event.get("text") or "").strip()
+        if len(text) < 10:
+            return False
+        channel = event.get("channel", "")
+        if channel in auto_channels:
+            return True
+        if mentions_always:
+            uid = _bot_user_id()
+            return bool(uid) and f"<@{uid}>" in text
+        return False
+
+    @app.event("message")
+    def handle_passive_message(event, say, client):
+        if not _should_scan(event):
+            return
+        text = (event.get("text") or "").strip()
+        # Strip bot mention from the text before classification so the model
+        # judges the actual ask, not our own user id.
+        uid = _bot_user_id()
+        if uid:
+            text = text.replace(f"<@{uid}>", "").strip()
+        try:
+            from .ticket_detector import classify
+            result = classify(text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ticket classify error: %s", e)
+            return
+        if not result.ticket:
+            return
+        # Post a confirmation in the same thread (start a new thread if message
+        # was top-level).
+        channel = event["channel"]
+        thread_ts = event.get("thread_ts") or event["ts"]
+        # Stash the proposed task under a fresh "pending ticket id" so the
+        # button callback knows what to start. We use the message ts as the
+        # natural unique key.
+        pending_id = f"slk-{thread_ts}"
+        _pending_tickets[pending_id] = {"task": result.summary or text[:200],
+                                         "channel": channel, "thread_ts": thread_ts,
+                                         "user": event.get("user", ""),
+                                         "raw": text}
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn",
+                "text": (f"🎫 *Ticket detected* (confidence {result.confidence:.0%})\n"
+                         f"> {result.summary}\n"
+                         f"Start a workflow for this?")}},
+            {"type": "actions", "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "🟢 Start workflow"},
+                 "style": "primary", "action_id": "ai_company.ticket_start", "value": pending_id},
+                {"type": "button", "text": {"type": "plain_text", "text": "🟡 Not now"},
+                 "action_id": "ai_company.ticket_skip", "value": pending_id},
+            ]},
+        ]
+        app.client.chat_postMessage(channel=channel, thread_ts=thread_ts,
+                                     text="Ticket detected — start workflow?", blocks=blocks)
+
+    @app.action("ai_company.ticket_start")
+    def handle_ticket_start(ack, body, action):
+        ack()
+        pid = action["value"]
+        ticket = _pending_tickets.pop(pid, None)
+        if not ticket:
+            return
+        wid = dispatcher.start_workflow(
+            task=ticket["task"], channel=ticket["channel"],
+            thread_ts=ticket["thread_ts"], user=ticket["user"],
+        )
+        app.client.chat_postMessage(
+            channel=ticket["channel"], thread_ts=ticket["thread_ts"],
+            text=f"▶ workflow `{wid}` started for: _{ticket['task'][:160]}_",
+        )
+        task_queue.push(ticket["task"], priority=0, workflow_id=wid,
+                        metadata={"source": "slack-ticket", "user": ticket["user"],
+                                  "channel": ticket["channel"]})
+
+    @app.action("ai_company.ticket_skip")
+    def handle_ticket_skip(ack, body, action):
+        ack()
+        _pending_tickets.pop(action["value"], None)
+
     return app
+
+
+# In-memory store of detected-but-unconfirmed tickets. Keyed by Slack ts.
+_pending_tickets: dict[str, dict] = {}
 
 
 def main() -> int:

@@ -214,13 +214,31 @@ in CI.
   `python cli.py memory backend` to inspect, `memory reembed` to
   backfill old rows.
 - **Slack bot** — Socket Mode bot in [communication/slack.py](communication/slack.py).
-  `/ai-run <task>` starts a workflow in a thread; each checkpoint posts a
-  Block Kit message with Approve/Reject buttons. Run with:
+  Two activation paths:
+  1. Explicit slash command: `/ai-run <task>` starts a workflow in a thread; each
+     checkpoint posts a Block Kit message with Approve/Reject buttons.
+  2. **Passive ticket detection.** The bot subscribes to channel `message`
+     events, classifies each message via `communication/ticket_detector.py`
+     (uses the cheap `simple` task-type for ~$0/message), and when a
+     message looks like a coding task posts a "🎫 Ticket detected — start
+     workflow?" prompt with Start/Skip buttons. Approval kicks off the
+     full plan → code → test → commit flow with the existing HIL
+     checkpoints. Configure with:
+     ```
+     SLACK_AUTO_CHANNELS=C0123,C0456        # channel IDs to auto-scan
+     SLACK_AUTO_MENTIONS_ALWAYS=true        # also classify when bot is @mentioned in any channel
+     TICKET_CONFIDENCE_MIN=0.6              # below this, treat as non-ticket
+     TICKET_MAX_INPUT_CHARS=1200            # trim long messages before classify
+     ```
+  Run with:
   ```
   pip install slack-bolt slack-sdk
   SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... \
     python -m communication.slack
   ```
+  Slack app scopes needed for passive mode: `channels:history`,
+  `groups:history`, `chat:write`, `commands`, plus the `message.channels`
+  / `message.groups` event subscriptions in Socket Mode.
 - **`pi-nvidia-nim` submodule was removed** — it targeted a different
   runtime (pi-coding-agent / TypeScript) and was never imported by the
   Python code.
