@@ -223,6 +223,16 @@ def build_app():
         if c.strip()
     }
     mentions_always = os.getenv("SLACK_AUTO_MENTIONS_ALWAYS", "true").lower() in ("1", "true", "yes", "on")
+    # SLACK_ALLOWED_APPROVERS=U01ABC,U02DEF — comma-separated Slack user IDs
+    # allowed to click "Start workflow". Empty = no restriction.
+    allowed_approvers = {
+        u.strip() for u in (os.getenv("SLACK_ALLOWED_APPROVERS", "").split(","))
+        if u.strip()
+    }
+    # SLACK_THREAD_CONTEXT_MAX_REPLIES=8 — top-level msg often vague; we pull
+    # up to N replies from the same thread before classifying so the model
+    # sees the actual ask.
+    thread_max_replies = int(os.getenv("SLACK_THREAD_CONTEXT_MAX_REPLIES", "8"))
 
     bot_user_id_holder: dict[str, str] = {}
 
@@ -255,36 +265,80 @@ def build_app():
             return bool(uid) and f"<@{uid}>" in text
         return False
 
+    def _thread_context(channel: str, thread_ts: str, top_text: str) -> str:
+        """Pull up to `thread_max_replies` reply texts from the same thread and
+        return them concatenated with the top message. Top-level messages
+        (thread_ts == ts) often read as vague ("can someone fix this?"); the
+        actual ask usually lives in replies."""
+        if thread_max_replies <= 0:
+            return top_text
+        try:
+            res = app.client.conversations_replies(
+                channel=channel, ts=thread_ts, limit=thread_max_replies + 1,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("conversations.replies failed: %s", e)
+            return top_text
+        msgs = res.get("messages") or []
+        if len(msgs) <= 1:
+            return top_text
+        parts: list[str] = [top_text]
+        bot_uid = _bot_user_id()
+        for m in msgs[1:thread_max_replies + 1]:
+            # Skip our own confirmation prompts; they'd leak into classification.
+            if m.get("bot_id") or m.get("user") == bot_uid:
+                continue
+            t = (m.get("text") or "").strip()
+            if t:
+                parts.append(t)
+        return "\n---\n".join(parts)
+
     @app.event("message")
     def handle_passive_message(event, say, client):
         if not _should_scan(event):
             return
+        channel = event["channel"]
+        ts = event["ts"]
         text = (event.get("text") or "").strip()
         # Strip bot mention from the text before classification so the model
         # judges the actual ask, not our own user id.
         uid = _bot_user_id()
         if uid:
             text = text.replace(f"<@{uid}>", "").strip()
+
+        # Dedup: skip if we've already classified the same (channel, ts, text).
+        # Survives bot restarts because the cache lives in SQLite.
+        from storage import slack_tickets as _store
+        if _store.already_seen(channel, ts, text):
+            return
+
+        # Pull thread context (replies) before classifying so the model sees
+        # the actual ask, not just a vague top-level prompt.
+        thread_ts = event.get("thread_ts") or ts
+        classification_input = _thread_context(channel, thread_ts, text)
+
         try:
             from .ticket_detector import classify
-            result = classify(text)
+            result = classify(classification_input)
         except Exception as e:  # noqa: BLE001
             logger.warning("ticket classify error: %s", e)
             return
+
+        # Record the classification result either way so we don't re-classify
+        # the same message after a restart.
+        _store.mark_seen(channel, ts, text, was_ticket=result.ticket,
+                         summary=result.summary)
         if not result.ticket:
             return
-        # Post a confirmation in the same thread (start a new thread if message
-        # was top-level).
-        channel = event["channel"]
-        thread_ts = event.get("thread_ts") or event["ts"]
-        # Stash the proposed task under a fresh "pending ticket id" so the
-        # button callback knows what to start. We use the message ts as the
-        # natural unique key.
+
         pending_id = f"slk-{thread_ts}"
-        _pending_tickets[pending_id] = {"task": result.summary or text[:200],
-                                         "channel": channel, "thread_ts": thread_ts,
-                                         "user": event.get("user", ""),
-                                         "raw": text}
+        _store.add_pending(
+            pending_id,
+            channel=channel, thread_ts=thread_ts,
+            user=event.get("user", ""),
+            task=result.summary or classification_input[:200],
+            raw=classification_input,
+        )
         blocks = [
             {"type": "section", "text": {"type": "mrkdwn",
                 "text": (f"🎫 *Ticket detected* (confidence {result.confidence:.0%})\n"
@@ -303,32 +357,42 @@ def build_app():
     @app.action("ai_company.ticket_start")
     def handle_ticket_start(ack, body, action):
         ack()
-        pid = action["value"]
-        ticket = _pending_tickets.pop(pid, None)
+        clicker = (body.get("user") or {}).get("id", "")
+        # Approver gate: when SLACK_ALLOWED_APPROVERS is set, only listed
+        # Slack user ids may start a workflow. Empty = open to anyone.
+        if allowed_approvers and clicker not in allowed_approvers:
+            chan = (body.get("channel") or {}).get("id", "")
+            try:
+                app.client.chat_postEphemeral(
+                    channel=chan, user=clicker,
+                    text="⛔ Not on the approver allowlist (SLACK_ALLOWED_APPROVERS).",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("postEphemeral failed: %s", e)
+            return
+        from storage import slack_tickets as _store
+        ticket = _store.pop_pending(action["value"])
         if not ticket:
             return
         wid = dispatcher.start_workflow(
-            task=ticket["task"], channel=ticket["channel"],
-            thread_ts=ticket["thread_ts"], user=ticket["user"],
+            task=ticket.task, channel=ticket.channel,
+            thread_ts=ticket.thread_ts, user=ticket.user,
         )
         app.client.chat_postMessage(
-            channel=ticket["channel"], thread_ts=ticket["thread_ts"],
-            text=f"▶ workflow `{wid}` started for: _{ticket['task'][:160]}_",
+            channel=ticket.channel, thread_ts=ticket.thread_ts,
+            text=f"▶ workflow `{wid}` started by <@{clicker}> for: _{ticket.task[:160]}_",
         )
-        task_queue.push(ticket["task"], priority=0, workflow_id=wid,
-                        metadata={"source": "slack-ticket", "user": ticket["user"],
-                                  "channel": ticket["channel"]})
+        task_queue.push(ticket.task, priority=0, workflow_id=wid,
+                        metadata={"source": "slack-ticket", "user": ticket.user,
+                                  "approver": clicker, "channel": ticket.channel})
 
     @app.action("ai_company.ticket_skip")
     def handle_ticket_skip(ack, body, action):
         ack()
-        _pending_tickets.pop(action["value"], None)
+        from storage import slack_tickets as _store
+        _store.pop_pending(action["value"])
 
     return app
-
-
-# In-memory store of detected-but-unconfirmed tickets. Keyed by Slack ts.
-_pending_tickets: dict[str, dict] = {}
 
 
 def main() -> int:
