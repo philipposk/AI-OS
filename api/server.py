@@ -278,12 +278,6 @@ def _build_app():
             raise HTTPException(status_code=404, detail="unknown workflow")
         return {"workflow_id": wid, "pending": entry.get("pending")}
 
-    # ---------- Static SPA ----------
-    from pathlib import Path as _Path
-    _spa_dir = _Path(__file__).resolve().parent.parent / "frontend"
-    if _spa_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(_spa_dir), html=True), name="spa")
-
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
         if (err := _auth_check(dict(request.headers))):
@@ -313,6 +307,17 @@ def _build_app():
         except ProviderUnavailable as e:
             raise HTTPException(status_code=503, detail=str(e))
         return JSONResponse(_to_openai_response(res))
+
+    # ---------- Static SPA (mounted last so it never shadows API routes) ----------
+    from pathlib import Path as _Path
+    from fastapi.responses import RedirectResponse
+    _spa_dir = _Path(__file__).resolve().parent.parent / "frontend"
+    if _spa_dir.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(_spa_dir), html=True), name="spa")
+
+        @app.get("/")
+        def _root():
+            return RedirectResponse(url="/ui/")
 
     return app
 

@@ -145,15 +145,6 @@
 </div>
 <div id="toast" class="toast"></div>
 
-<script type="module" src="/static/app.js"></script>
-<script>
-  // app.js is served alongside index.html when StaticFiles mounts the
-  // frontend directory at /. We use a <script src> with the explicit path
-  // so it works regardless of how the host serves the file.
-</script>
-<script type="module">
-  // Inline bootstrap because StaticFiles mounts at / not /static.
-  await import("./app.js");
-</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
