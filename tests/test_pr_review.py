@@ -121,9 +121,12 @@ def test_review_pr_dry_run(monkeypatch):
     result = review_pr(9, dry_run=True)
     assert result.pr_number == 9
     assert "LGTM" in result.summary
-    assert len(result.line_comments) == 2
+    # Dedup collapses same (path,line) into one, preserving both bodies.
+    assert len(result.line_comments) == 1
     assert result.line_comments[0].path == "x"
     assert result.line_comments[0].line == 1
+    assert "rename" in result.line_comments[0].body
+    assert "second comment" in result.line_comments[0].body
     assert result.posted is False  # dry_run skipped posting
     assert result.posted_line_comments == 0
 
@@ -231,3 +234,121 @@ def test_review_pr_trims_long_diff(monkeypatch):
 
     review_pr(9, dry_run=True)
     assert "[diff truncated" in captured["user"]
+
+
+# ---------- severity / crew / formatting (Phase Z extensions) ----------
+
+
+import tools.pr_review as _pr
+from router.base import ChatResult
+
+
+def test_severity_default_minor_and_clamp_to_known():
+    out = _pr._parse_line_comments(json.dumps([
+        {"path": "a.py", "line": 1, "body": "x"},                      # no severity → minor
+        {"path": "b.py", "line": 1, "body": "y", "severity": "garbage"},  # bad → minor
+        {"path": "c.py", "line": 1, "body": "z", "severity": "SECURITY"}, # case-insensitive
+    ]))
+    assert [c.severity for c in out] == ["minor", "minor", "security"]
+
+
+def test_dedup_keeps_highest_severity_and_orders_security_first():
+    items = [
+        _pr.LineComment("x.py", 5, "first",  "minor"),
+        _pr.LineComment("x.py", 5, "second", "security"),
+        _pr.LineComment("y.py", 1, "third",  "info"),
+    ]
+    out = _pr._dedup_line_comments(items)
+    by_key = {(c.path, c.line): c for c in out}
+    assert by_key[("x.py", 5)].severity == "security"
+    assert out[0].severity == "security"
+
+
+def test_verdict_security_forces_request_changes_even_with_lgtm():
+    items = [_pr.LineComment("a.py", 1, "boom", "security")]
+    assert _pr._verdict("looks fine LGTM", items) == "REQUEST_CHANGES"
+
+
+def test_format_body_tags_major_and_emits_suggestion_block():
+    body = _pr._format_body(_pr.LineComment("a.py", 1, "fix this", "major",
+                                            suggestion="    return None"))
+    assert body.startswith("[major]")
+    assert "```suggestion" in body
+    assert "    return None" in body
+
+
+def test_parse_rejects_multiline_suggestion():
+    out = _pr._parse_line_comments(json.dumps([
+        {"path": "a.py", "line": 1, "body": "x", "suggestion": "line1\nline2"}
+    ]))
+    assert out[0].suggestion is None
+
+
+def test_review_pr_crew_mode_makes_three_line_calls(monkeypatch):
+    monkeypatch.setenv("CREW_MODE", "true")
+    monkeypatch.setattr(_pr, "gh_available", lambda: True)
+    monkeypatch.setattr(_pr, "gh_pr_view", lambda n: {
+        "number": 42, "title": "T", "state": "OPEN", "body": "B",
+        "baseRefName": "main", "headRefName": "feat",
+    })
+    monkeypatch.setattr(_pr, "gh_pr_diff", lambda n: "diff --git a/a b/a\n@@\n+x")
+
+    calls: list[str] = []
+
+    canned = iter([
+        "summary LGTM",
+        json.dumps([{"path": "a.py", "line": 1, "body": "rename", "severity": "info"}]),
+        json.dumps([{"path": "a.py", "line": 1, "body": "edge case", "severity": "major"}]),
+        json.dumps([{"path": "b.py", "line": 5, "body": "leak",     "severity": "minor"}]),
+    ])
+
+    class _R:
+        def chat(self, msgs, *a, **k):
+            calls.append(msgs[0]["content"][:40])
+            return ChatResult(text=next(canned), model="x", provider="x",
+                              prompt_tokens=0, completion_tokens=0)
+
+    monkeypatch.setattr("router.ModelRouter", lambda *a, **k: _R())
+
+    res = _pr.review_pr(42, dry_run=True)
+    assert res.mode == "crew"
+    assert len(calls) == 4  # summary + reviewer + tester + critic
+    by_key = {(c.path, c.line): c for c in res.line_comments}
+    assert by_key[("a.py", 1)].severity == "major"   # dedup escalated
+    assert ("b.py", 5) in by_key
+    assert res.verdict == "REQUEST_CHANGES"          # major present
+
+
+def test_review_pr_caps_max_comments(monkeypatch):
+    monkeypatch.setenv("PR_REVIEW_MAX_COMMENTS", "2")
+    monkeypatch.setattr(_pr, "gh_available", lambda: True)
+    monkeypatch.setattr(_pr, "gh_pr_view", lambda n: {"number": 1, "title": "T", "state": "OPEN"})
+    monkeypatch.setattr(_pr, "gh_pr_diff", lambda n: "diff content")
+    many = json.dumps([
+        {"path": f"f{i}.py", "line": 1, "body": "x", "severity": "minor"}
+        for i in range(20)
+    ])
+    canned = iter(["summary", many])
+
+    class _R:
+        def chat(self, *a, **k):
+            return ChatResult(text=next(canned), model="x", provider="x",
+                              prompt_tokens=0, completion_tokens=0)
+
+    monkeypatch.setattr("router.ModelRouter", lambda *a, **k: _R())
+    res = _pr.review_pr(1, dry_run=True)
+    assert len(res.line_comments) == 2
+
+
+def test_result_to_dict_includes_severity_fields(monkeypatch):
+    res = _pr.ReviewResult(
+        pr_number=7, summary="s", verdict="COMMENT",
+        line_comments=[_pr.LineComment("a.py", 1, "x", "security", suggestion="    fix")],
+        severity_counts={"security": 1, "major": 0, "minor": 0, "info": 0},
+        mode="crew",
+    )
+    d = _pr.result_to_dict(res)
+    assert d["mode"] == "crew"
+    assert d["severity_counts"]["security"] == 1
+    assert d["line_comments"][0]["severity"] == "security"
+    assert d["line_comments"][0]["suggestion"] == "    fix"
