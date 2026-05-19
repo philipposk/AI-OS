@@ -16,11 +16,11 @@ Per-role model overrides:
     CREW_REVIEWER_MODEL=...
 """
 from .bus import Message, MessageBus, get_bus
-from .coordinator import coordinate_plan, is_crew_mode
+from .coordinator import coordinate_plan, coordinate_review, is_crew_mode
 from .roles import Coder, Critic, Planner, Reviewer, Role, Tester
 
 __all__ = [
     "Message", "MessageBus", "get_bus",
     "Role", "Planner", "Coder", "Tester", "Reviewer", "Critic",
-    "coordinate_plan", "is_crew_mode",
+    "coordinate_plan", "coordinate_review", "is_crew_mode",
 ]

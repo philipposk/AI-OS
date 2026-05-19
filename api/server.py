@@ -39,8 +39,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.requests import Request
     from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.staticfiles import StaticFiles
     _HAS_FASTAPI = True
 except ImportError:  # pragma: no cover - exercised only without fastapi installed
     _HAS_FASTAPI = False
@@ -151,6 +153,21 @@ def _build_app():
         raise RuntimeError("FastAPI not installed. `pip install fastapi 'uvicorn[standard]'`")
 
     app = FastAPI(title="ai_company OpenAI-compat shim", version="0.1.0")
+
+    # CORS: glass and the bundled SPA both load via different origins
+    # (file://, app://, localhost ports). Allowed origins are env-driven; the
+    # default of "*" is acceptable because we still gate on the optional
+    # Authorization: Bearer header (API_COMPANY_TOKEN).
+    origins_raw = os.getenv("API_CORS_ORIGINS", "*").strip()
+    origins = [o.strip() for o in origins_raw.split(",") if o.strip()] or ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
     router = ModelRouter()
 
     @app.get("/health")
@@ -171,6 +188,101 @@ def _build_app():
     @app.get("/v1/accounting")
     def accounting(workflow_id: Optional[str] = None) -> Dict[str, Any]:
         return accounting_report(workflow_id=workflow_id)
+
+    # ---------- Workflows API (used by the bundled SPA + Slack/TG bots) ----------
+
+    _workflows: Dict[str, Any] = {}  # workflow_id → (graph, config, last_pending)
+
+    def _get_workflow(wid: str):
+        # Lazy build because importing orchestrator pulls langgraph (heavy).
+        from orchestrator import build_graph
+        entry = _workflows.get(wid)
+        if entry is None:
+            entry = {"graph": build_graph(), "config": {"configurable": {"thread_id": wid}},
+                     "pending": None}
+            _workflows[wid] = entry
+        return entry
+
+    def _serialise_event(ev: dict) -> dict:
+        out: Dict[str, Any] = {}
+        for k, v in ev.items():
+            if k == "__interrupt__":
+                # Resolve interrupt objects to their values
+                out["interrupt"] = (v[0].value if v else None)
+            else:
+                out[k] = v
+        return out
+
+    @app.post("/v1/workflows/start")
+    async def workflow_start(request: Request):
+        if (err := _auth_check(dict(request.headers))):
+            raise HTTPException(status_code=401, detail=err)
+        body = await request.json()
+        task = (body.get("task") or "").strip()
+        if not task:
+            raise HTTPException(status_code=400, detail="task required")
+        crew_mode = bool(body.get("crew_mode") or False)
+        search_enabled = bool(body.get("search_enabled") or False)
+        from orchestrator import new_workflow_id
+        wid = body.get("workflow_id") or new_workflow_id()
+        entry = _get_workflow(wid)
+        payload = {"task": task, "workflow_id": wid,
+                   "crew_mode": crew_mode if crew_mode else None,
+                   "search_enabled": search_enabled}
+        events: List[dict] = []
+        pending: Optional[dict] = None
+
+        def _drive():
+            nonlocal pending
+            for ev in entry["graph"].stream(payload, config=entry["config"]):
+                if "__interrupt__" in ev:
+                    pending = ev["__interrupt__"][0].value if ev["__interrupt__"] else None
+                    break
+                events.append(_serialise_event(ev))
+
+        await asyncio.to_thread(_drive)
+        entry["pending"] = pending
+        return JSONResponse({"workflow_id": wid, "events": events, "pending": pending,
+                             "finished": pending is None})
+
+    @app.post("/v1/workflows/{wid}/resume")
+    async def workflow_resume(wid: str, request: Request):
+        if (err := _auth_check(dict(request.headers))):
+            raise HTTPException(status_code=401, detail=err)
+        body = await request.json()
+        decision = body.get("decision")
+        if decision is None:
+            raise HTTPException(status_code=400, detail="decision required")
+        entry = _get_workflow(wid)
+        from langgraph.types import Command
+        events: List[dict] = []
+        pending: Optional[dict] = None
+
+        def _drive():
+            nonlocal pending
+            for ev in entry["graph"].stream(Command(resume=decision), config=entry["config"]):
+                if "__interrupt__" in ev:
+                    pending = ev["__interrupt__"][0].value if ev["__interrupt__"] else None
+                    break
+                events.append(_serialise_event(ev))
+
+        await asyncio.to_thread(_drive)
+        entry["pending"] = pending
+        return JSONResponse({"workflow_id": wid, "events": events, "pending": pending,
+                             "finished": pending is None})
+
+    @app.get("/v1/workflows/{wid}")
+    def workflow_status(wid: str):
+        entry = _workflows.get(wid)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="unknown workflow")
+        return {"workflow_id": wid, "pending": entry.get("pending")}
+
+    # ---------- Static SPA ----------
+    from pathlib import Path as _Path
+    _spa_dir = _Path(__file__).resolve().parent.parent / "frontend"
+    if _spa_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(_spa_dir), html=True), name="spa")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):

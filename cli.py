@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from typing import Any
 
@@ -165,6 +166,35 @@ def _live_smoke_test(router: ModelRouter) -> None:
             print(f"  {name:11s} FAIL {dt:6.0f}ms  model={model}  err={msg}")
 
 
+def cmd_review_pr(args: argparse.Namespace) -> int:
+    """Phase Z: CodeRabbit-style automated PR review."""
+    from tools.pr_review import review_pr
+
+    # Accept either a number or a github URL.
+    target = args.pr
+    m = re.search(r"/pull/(\d+)", target)
+    if m:
+        target = m.group(1)
+
+    print(f"# reviewing PR #{target} (dry_run={args.dry_run})")
+    try:
+        result = review_pr(target, dry_run=args.dry_run)
+    except RuntimeError as e:
+        print(f"error: {e}")
+        return 2
+
+    print("\n=== Summary ===")
+    print(result.summary)
+    print(f"\n=== Line comments ({len(result.line_comments)}) ===")
+    for lc in result.line_comments:
+        print(f"  {lc.path}:{lc.line}  {lc.body[:140]}")
+    if not args.dry_run:
+        print(f"\nposted summary: {result.posted}")
+        print(f"line comments posted: {result.posted_line_comments} "
+              f"(skipped: {result.skipped_line_comments})")
+    return 0
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     if args.queue_cmd == "push":
         t = task_queue.push(args.task, priority=args.priority)
@@ -310,6 +340,12 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--live", action="store_true",
                      help="Also send a 1-token hello to each available provider (diagnostic).")
     chk.set_defaults(func=cmd_check)
+
+    pr = sub.add_parser("review-pr", help="CodeRabbit-style automated PR review (Reviewer + Critic crew → gh)")
+    pr.add_argument("pr", help="PR number or full github.com PR URL")
+    pr.add_argument("--dry-run", action="store_true",
+                    help="Print the review payload instead of posting to GitHub")
+    pr.set_defaults(func=cmd_review_pr)
 
     q = sub.add_parser("queue", help="Task queue ops")
     qsub = q.add_subparsers(dest="queue_cmd", required=True)

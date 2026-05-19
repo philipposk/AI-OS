@@ -22,7 +22,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from .bus import get_bus
-from .roles import Critic, Planner
+from .roles import Critic, Planner, Reviewer, Tester
 
 logger = logging.getLogger(__name__)
 
@@ -98,3 +98,55 @@ def coordinate_plan(task: str, analysis: str, *, workflow_id: Optional[str] = No
     bus.post(workflow_id=wf, role="coordinator",
              content=f"final plan: {len(final_steps)} step(s)")
     return final_steps
+
+
+def coordinate_review(
+    *,
+    task: str,
+    plan: List[dict],
+    code_changes: List[dict],
+    test_results: Optional[Dict[str, Any]] = None,
+    workflow_id: Optional[str] = None,
+) -> str:
+    """Reviewer + Tester perspectives merged into one summary string.
+
+    Tester first calls out missing test coverage or risky edges; Reviewer
+    writes the final human-facing summary that incorporates the Tester's
+    notes. Every role response is bussed for the dashboard transcript.
+    """
+    bus = get_bus()
+    wf = workflow_id or ""
+
+    plan_titles = [s.get("title", "") for s in (plan or [])]
+    files = sorted({c.get("path", "") for c in (code_changes or []) if c.get("path")})
+    tests_passed = (test_results or {}).get("passed")
+    tr_stdout = ((test_results or {}).get("stdout") or "")[-800:]
+
+    tester = Tester()
+    tester_input = (
+        f"Task: {task}\n"
+        f"Plan titles: {plan_titles}\n"
+        f"Files changed: {files}\n"
+        f"Tests passed: {tests_passed}\n"
+        f"Test output (tail):\n{tr_stdout}"
+    )
+    t_res = tester.respond(tester_input, workflow_id=wf, max_tokens=400, temperature=0.4)
+    bus.post(workflow_id=wf, role="tester", content=t_res.content,
+             meta={"model": t_res.model, "provider": t_res.provider,
+                   "in": t_res.prompt_tokens, "out": t_res.completion_tokens})
+
+    reviewer = Reviewer()
+    reviewer_input = (
+        f"Task: {task}\n"
+        f"Plan titles: {plan_titles}\n"
+        f"Files changed: {files}\n"
+        f"Tests passed: {tests_passed}\n\n"
+        f"Tester notes:\n{t_res.content}"
+    )
+    r_res = reviewer.respond(reviewer_input, workflow_id=wf, max_tokens=300, temperature=0.3)
+    bus.post(workflow_id=wf, role="reviewer", content=r_res.content,
+             meta={"model": r_res.model, "provider": r_res.provider,
+                   "in": r_res.prompt_tokens, "out": r_res.completion_tokens})
+
+    bus.post(workflow_id=wf, role="coordinator", content="review crew done")
+    return r_res.content

@@ -285,24 +285,47 @@ def test_node(state: GraphState) -> Dict[str, Any]:
 
 def review_node(state: GraphState) -> Dict[str, Any]:
     wf = state.get("workflow_id")
-    summary_input = json.dumps(
-        {
-            "task": state.get("task"),
-            "plan_titles": [s.get("title") for s in state.get("plan", [])],
-            "files_touched": sorted({c.get("path", "") for c in state.get("code_changes", [])}),
-            "tests_passed": (state.get("test_results") or {}).get("passed"),
-        },
-        indent=2,
-    )
-    system = (
-        "Summarise the change in <=80 words for a human reviewer. State what changed, "
-        "which files were touched, whether tests passed, and any risk worth a second look. "
-        "No emoji, no marketing tone."
-    )
+    # Crew mode: Tester + Reviewer crew gives two perspectives merged into the
+    # final summary. Falls back to single-LLM summary if crew is off or fails.
     try:
-        summary = _chat("review", system, summary_input, workflow_id=wf, state=state)
-    except BudgetExceeded as e:
-        return _bb(e, "do_review")
+        from .crew import coordinate_review, is_crew_mode
+        crew_on = is_crew_mode(state)
+    except Exception:  # noqa: BLE001
+        crew_on = False
+    summary: str
+    if crew_on:
+        try:
+            summary = coordinate_review(
+                task=state.get("task") or "",
+                plan=state.get("plan") or [],
+                code_changes=state.get("code_changes") or [],
+                test_results=state.get("test_results"),
+                workflow_id=wf,
+            )
+        except BudgetExceeded as e:
+            return _bb(e, "do_review")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("crew review failed (%s); falling back to single-LLM", e)
+            crew_on = False
+    if not crew_on:
+        summary_input = json.dumps(
+            {
+                "task": state.get("task"),
+                "plan_titles": [s.get("title") for s in state.get("plan", [])],
+                "files_touched": sorted({c.get("path", "") for c in state.get("code_changes", [])}),
+                "tests_passed": (state.get("test_results") or {}).get("passed"),
+            },
+            indent=2,
+        )
+        system = (
+            "Summarise the change in <=80 words for a human reviewer. State what changed, "
+            "which files were touched, whether tests passed, and any risk worth a second look. "
+            "No emoji, no marketing tone."
+        )
+        try:
+            summary = _chat("review", system, summary_input, workflow_id=wf, state=state)
+        except BudgetExceeded as e:
+            return _bb(e, "do_review")
     try:
         memory_store.add(
             f"TASK: {state.get('task')}\nSUMMARY: {summary}",

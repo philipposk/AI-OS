@@ -68,8 +68,9 @@ back to the next available provider's default model rather than crashing.
 ```bash
 python cli.py run "<task>"                # run a workflow with terminal HIL prompts
 python cli.py providers                   # which providers have a key
-python cli.py check                       # smoke-test the install
+python cli.py check [--live]              # smoke-test the install; --live also pings each provider
 python cli.py accounting [--json]         # token + cost ledger summary
+python cli.py review-pr <num|url> [--dry-run]   # CodeRabbit-style automated PR review (gh required)
 python cli.py queue push "<task>" [--priority N]
 python cli.py queue list [--status …]
 python cli.py queue status

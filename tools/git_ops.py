@@ -141,6 +141,69 @@ def gh_repo_default_branch(cwd: str | Path | None = None) -> Optional[str]:
     return ref.get("name") if isinstance(ref, dict) else None
 
 
+def gh_pr_diff(num: int | str, cwd: str | Path | None = None) -> Optional[str]:
+    """Raw unified diff for the PR. None if gh missing / request fails."""
+    if not gh_available():
+        return None
+    res = _gh("pr", "diff", str(num), cwd=cwd)
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def gh_pr_post_review(num: int | str, *, body: str, event: str = "COMMENT",
+                      cwd: str | Path | None = None) -> bool:
+    """Post a top-level review (summary) on a PR.
+
+    event ∈ {"COMMENT", "APPROVE", "REQUEST_CHANGES"}.
+    Returns True on success.
+    """
+    if not gh_available():
+        return False
+    flag = {"COMMENT": "--comment", "APPROVE": "--approve",
+            "REQUEST_CHANGES": "--request-changes"}.get(event, "--comment")
+    res = _gh("pr", "review", str(num), flag, "--body", body, cwd=cwd)
+    return res.returncode == 0
+
+
+def gh_pr_post_line_comment(num: int | str, *, body: str, path: str, line: int,
+                            commit_sha: Optional[str] = None,
+                            cwd: str | Path | None = None) -> bool:
+    """Post a single line-comment on a PR via `gh api`.
+
+    GitHub's PR-review API requires the commit SHA of the head ref. We look
+    it up from gh_pr_view() when the caller doesn't pass one.
+    """
+    if not gh_available():
+        return False
+    if not commit_sha:
+        pr = gh_pr_view(num, cwd=cwd) or {}
+        # gh's "headRefOid" isn't in our default field set; ask for it.
+        extra = _gh_json(["pr", "view", str(num), "--json", "headRefOid"], cwd=cwd)
+        if isinstance(extra, dict):
+            commit_sha = extra.get("headRefOid")
+        if not commit_sha:
+            return False
+    # Repo owner/name needed for /repos/:owner/:repo/pulls/:num/comments.
+    repo_meta = _gh_json(["repo", "view", "--json", "nameWithOwner"], cwd=cwd)
+    if not isinstance(repo_meta, dict):
+        return False
+    nwo = repo_meta.get("nameWithOwner")
+    if not nwo:
+        return False
+    res = _gh(
+        "api", "-X", "POST",
+        f"/repos/{nwo}/pulls/{num}/comments",
+        "-f", f"body={body}",
+        "-f", f"commit_id={commit_sha}",
+        "-f", f"path={path}",
+        "-F", f"line={int(line)}",
+        "-f", "side=RIGHT",
+        cwd=cwd,
+    )
+    return res.returncode == 0
+
+
 # ---------- Phase R: task-text → PR/issue numbers ----------
 
 import re as _re
