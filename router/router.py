@@ -157,13 +157,23 @@ class ModelRouter:
             messages = text_only(messages)
         provider = self.providers[provider_name]
         logger.info("router.chat task=%s provider=%s model=%s", task_type, provider_name, resolved_model)
+        import time as _t
+        from observability.metrics import record_chat as _mrec, record_error as _merr
+        t0 = _t.perf_counter()
         try:
             result = provider.chat(messages, resolved_model, max_tokens=max_tokens, temperature=temperature)
         except Exception as e:  # noqa: BLE001
             bk.record_failure(provider_name, type(e).__name__ + ": " + str(e)[:160],
                               hard=_is_hard_failure(e))
+            _mrec(provider=provider_name, task_type=task_type, status="error",
+                  latency_s=_t.perf_counter() - t0)
+            _merr(kind=type(e).__name__)
             raise
         bk.record_success(provider_name)
+        _mrec(provider=result.provider, task_type=task_type, status="ok",
+              latency_s=_t.perf_counter() - t0,
+              prompt_tokens=result.prompt_tokens,
+              completion_tokens=result.completion_tokens)
         record_call(
             provider=result.provider,
             model=result.model,

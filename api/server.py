@@ -170,9 +170,24 @@ def _build_app():
 
     router = ModelRouter()
 
+    # Initialise observability hooks (no-op if envs not set / deps missing)
+    try:
+        from observability import init_metrics, init_sentry
+        init_metrics()
+        init_sentry()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("observability init failed: %s", e)
+
     @app.get("/health")
     def health() -> Dict[str, Any]:
         return {"ok": True, "providers": router.available_providers()}
+
+    @app.get("/v1/metrics")
+    def metrics_endpoint():
+        from fastapi.responses import Response
+        from observability.metrics import metrics_render
+        payload, content_type = metrics_render()
+        return Response(content=payload, media_type=content_type)
 
     @app.get("/v1/models")
     def list_models() -> Dict[str, Any]:
@@ -332,6 +347,12 @@ def main() -> int:
     except ImportError:
         print("Run: pip install fastapi 'uvicorn[standard]'")
         return 2
+    # Optional structured logging — flip with LOG_FORMAT=json
+    try:
+        from observability import configure_logging
+        configure_logging()
+    except Exception:  # noqa: BLE001
+        pass
     host = os.getenv("API_HOST", "127.0.0.1")
     port = int(os.getenv("API_PORT", "8765"))
     print(f"⚡ ai_company OpenAI shim on http://{host}:{port}  (auth: {'on' if os.getenv('API_COMPANY_TOKEN') else 'off'})")
