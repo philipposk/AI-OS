@@ -22,7 +22,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from .bus import get_bus
-from .roles import Critic, Planner, Reviewer, Tester
+from .roles import Critic, OpenHandsRole, Planner, Reviewer, Tester
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,33 @@ def coordinate_plan(task: str, analysis: str, *, workflow_id: Optional[str] = No
     bus.post(workflow_id=wf, role="coordinator",
              content=f"final plan: {len(final_steps)} step(s)")
     return final_steps
+
+
+def coordinate_code(
+    task: str,
+    analysis: str,
+    plan: List[dict],
+    *,
+    workflow_id: Optional[str] = None,
+) -> str:
+    """Delegate coding to OpenHands if enabled, else fall back to Coder role.
+
+    Returns a freeform string (diff summary or file-map JSON). The caller
+    (`nodes.code_node`) converts it to `CodeChange` objects.
+    """
+    bus = get_bus()
+    wf = workflow_id or ""
+
+    coder = OpenHandsRole()  # falls back to Coder internally when OH disabled
+    plan_text = json.dumps(plan, indent=2)
+    result = coder.respond(
+        f"Task: {task}\n\nAnalysis:\n{analysis}\n\nPlan:\n{plan_text}",
+        workflow_id=wf, max_tokens=2048, temperature=0.3,
+    )
+    bus.post(workflow_id=wf, role=result.role, content=result.content[:800],
+             meta={"model": result.model, "provider": result.provider,
+                   "in": result.prompt_tokens, "out": result.completion_tokens})
+    return result.content
 
 
 def coordinate_review(

@@ -402,6 +402,17 @@ def build_parser() -> argparse.ArgumentParser:
     wsearch.add_argument("query")
     wsearch.add_argument("-k", "--top", type=int, default=5)
     w.set_defaults(func=cmd_web)
+
+    sk = sub.add_parser("slack", help="Manage Slack pending-ticket queue")
+    sksub = sk.add_subparsers(dest="slack_cmd", required=True)
+    skl = sksub.add_parser("list", help="List pending Slack tickets")
+    skl.add_argument("--limit", type=int, default=50)
+    ska = sksub.add_parser("approve", help="Approve a pending ticket → start workflow")
+    ska.add_argument("pending_id", help="Pending ticket ID (from 'slack list')")
+    sks = sksub.add_parser("skip", help="Skip / dismiss a pending ticket")
+    sks.add_argument("pending_id", help="Pending ticket ID (from 'slack list')")
+    sk.set_defaults(func=cmd_slack)
+
     return p
 
 
@@ -420,6 +431,46 @@ def cmd_web(args):
             if h.get("snippet"):
                 print(f"  {h['snippet'][:200]}")
         return 0
+    return 2
+
+
+def cmd_slack(args: argparse.Namespace) -> int:
+    """Manage Slack pending-ticket queue from the terminal."""
+    from storage import slack_tickets as st
+
+    if args.slack_cmd == "list":
+        items = st.list_pending(limit=args.limit)
+        if not items:
+            print("(no pending tickets)")
+            return 0
+        for p in items:
+            print(f"  {p.pending_id}  U:{p.user}  #{p.channel}  {p.created_at[:19]}")
+            print(f"    task: {p.task[:120]}")
+        return 0
+
+    if args.slack_cmd in ("approve", "skip"):
+        pending_id = args.pending_id
+        ticket = st.pop_pending(pending_id)
+        if ticket is None:
+            print(f"No pending ticket '{pending_id}' — already handled or expired.")
+            return 1
+        if args.slack_cmd == "skip":
+            print(f"Skipped '{pending_id}'.")
+            return 0
+        # approve → start workflow
+        from communication.dispatcher import WorkflowDispatcher
+        def _print_post(channel, thread_ts, text, blocks):
+            print(f"[→slack {channel}] {text[:200]}")
+        d = WorkflowDispatcher(_print_post)
+        wid = d.start_workflow(
+            task=ticket.task,
+            channel=ticket.channel,
+            thread_ts=ticket.thread_ts,
+            user=ticket.user,
+        )
+        print(f"Workflow {wid} started for ticket '{pending_id}'.")
+        return 0
+
     return 2
 
 

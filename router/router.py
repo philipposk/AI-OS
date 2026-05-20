@@ -71,6 +71,18 @@ def _parse_model_id(model_id: str) -> tuple[str | None, str]:
     return MODEL_PROVIDER_HINT.get(model_id), model_id
 
 
+def _call_timeout() -> float | None:
+    """Returns ROUTER_FALLBACK_TIMEOUT_S as float, or None if unset/invalid."""
+    raw = os.getenv("ROUTER_FALLBACK_TIMEOUT_S", "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
 def _is_hard_failure(e: BaseException) -> bool:
     """Auth/config errors trip the breaker immediately; rate limits and 5xx don't."""
     import requests as _r
@@ -160,8 +172,23 @@ class ModelRouter:
         import time as _t
         from observability.metrics import record_chat as _mrec, record_error as _merr
         t0 = _t.perf_counter()
+        # Optional per-call timeout so a hung provider doesn't block the whole
+        # chain. Set ROUTER_FALLBACK_TIMEOUT_S=30 to enable (default: off).
+        _timeout_s = _call_timeout()
         try:
-            result = provider.chat(messages, resolved_model, max_tokens=max_tokens, temperature=temperature)
+            if _timeout_s:
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    fut = _ex.submit(provider.chat, messages, resolved_model,
+                                     max_tokens=max_tokens, temperature=temperature)
+                    try:
+                        result = fut.result(timeout=_timeout_s)
+                    except _cf.TimeoutError as _te:
+                        raise ProviderUnavailable(
+                            f"{provider_name} timed out after {_timeout_s}s"
+                        ) from _te
+            else:
+                result = provider.chat(messages, resolved_model, max_tokens=max_tokens, temperature=temperature)
         except Exception as e:  # noqa: BLE001
             bk.record_failure(provider_name, type(e).__name__ + ": " + str(e)[:160],
                               hard=_is_hard_failure(e))

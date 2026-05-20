@@ -131,3 +131,103 @@ class Reviewer(Role):
         "You are the Reviewer. Summarise the change in <=80 words for a human "
         "approver: what changed, which files, whether tests passed, residual risk."
     )
+
+
+class OpenHandsRole(Role):
+    """Delegate coding tasks to a running OpenHands (All-Hands-AI) instance.
+
+    When `CREW_OPENHANDS=true` and `OPENHANDS_API_URL` is set (default
+    http://localhost:3000), this role sends the task + plan to OpenHands via
+    its REST API, polls until done, and returns the resulting diff/summary.
+
+    Falls back to the ordinary `Coder` role if OpenHands is unreachable or
+    the env flags are off.
+
+    Required env:
+        OPENHANDS_API_URL   — base URL of local OpenHands server (default http://localhost:3000)
+        OPENHANDS_API_KEY   — bearer token if OpenHands auth is enabled (optional)
+        CREW_OPENHANDS      — '1' / 'true' / 'yes' / 'on' to enable
+    """
+
+    name = "openhands"
+    task_type = "code"
+    _POLL_INTERVAL = 5   # seconds
+    _POLL_TIMEOUT = 300  # seconds
+
+    @staticmethod
+    def enabled() -> bool:
+        return os.getenv("CREW_OPENHANDS", "").strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _base_url() -> str:
+        return os.getenv("OPENHANDS_API_URL", "http://localhost:3000").rstrip("/")
+
+    @staticmethod
+    def _headers() -> dict:
+        headers = {"Content-Type": "application/json"}
+        key = os.getenv("OPENHANDS_API_KEY", "").strip()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
+
+    def respond(self, user: str, *, workflow_id: Optional[str] = None,
+                max_tokens: int = 1024, temperature: float = 0.4) -> RoleResult:
+        """Try OpenHands first; fall back to Coder role on any failure."""
+        if not self.enabled():
+            return Coder(self._router).respond(user, workflow_id=workflow_id,
+                                               max_tokens=max_tokens, temperature=temperature)
+        try:
+            return self._call_openhands(user, workflow_id=workflow_id)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "OpenHands unreachable (%s); falling back to Coder role", exc
+            )
+            return Coder(self._router).respond(user, workflow_id=workflow_id,
+                                               max_tokens=max_tokens, temperature=temperature)
+
+    def _call_openhands(self, task: str, *, workflow_id: Optional[str]) -> RoleResult:
+        import time
+        import urllib.request
+
+        base = self._base_url()
+        headers = self._headers()
+
+        # 1. Create a conversation / run.
+        import json as _json
+        body = _json.dumps({"task": task, "workflow_id": workflow_id or ""}).encode()
+        req = urllib.request.Request(f"{base}/api/conversations",
+                                     data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            conv = _json.loads(resp.read())
+        conv_id = conv.get("conversation_id") or conv.get("id")
+        if not conv_id:
+            raise RuntimeError(f"OpenHands: no conversation_id in response: {conv}")
+
+        # 2. Poll until status ∈ {finished, error, stopped}.
+        deadline = time.time() + self._POLL_TIMEOUT
+        result_text = ""
+        while time.time() < deadline:
+            time.sleep(self._POLL_INTERVAL)
+            req2 = urllib.request.Request(
+                f"{base}/api/conversations/{conv_id}",
+                headers=headers, method="GET",
+            )
+            with urllib.request.urlopen(req2, timeout=15) as resp2:
+                status_data = _json.loads(resp2.read())
+            status = (status_data.get("status") or "").lower()
+            if status in ("finished", "error", "stopped"):
+                result_text = status_data.get("result") or status_data.get("message") or status
+                break
+
+        if not result_text:
+            result_text = f"OpenHands timed out after {self._POLL_TIMEOUT}s for conv {conv_id}"
+
+        return RoleResult(
+            role=self.name,
+            content=result_text,
+            model="openhands",
+            provider="openhands",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )

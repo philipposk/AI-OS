@@ -13,6 +13,11 @@ Run:
 
 Allowlist (optional):
     TELEGRAM_ALLOWED_CHAT_IDS=12345,67890   # comma-separated chat ids
+
+Passive ticket detection (optional):
+    TELEGRAM_AUTO_DETECT=1        — scan all incoming text messages for tickets
+    TELEGRAM_AUTO_SCAN_CHATS=    — comma-sep chat ids to scan (empty = all allowed)
+    TICKET_CONFIDENCE_MIN=0.6     — minimum confidence to surface a ticket
 """
 from __future__ import annotations
 
@@ -239,22 +244,131 @@ def build_application():
         await update.message.reply_text(f"🟢 starting workflow `{wid}` for _{task[:200]}_", parse_mode="Markdown")
         task_queue.push(task, priority=0, workflow_id=wid, metadata={"source": "telegram", "user": user, "chat_id": chat.id})
 
+    # ---------- passive ticket detection ----------
+
+    def _auto_detect_on() -> bool:
+        return os.getenv("TELEGRAM_AUTO_DETECT", "").strip().lower() in ("1", "true", "yes", "on")
+
+    def _scan_chats() -> Set[int]:
+        raw = os.getenv("TELEGRAM_AUTO_SCAN_CHATS", "").strip()
+        if not raw:
+            return set()
+        return {int(x.strip()) for x in raw.split(",") if x.strip()}
+
+    async def on_message(update, context):
+        """Passive ticket scanner — runs on every text message."""
+        msg = update.effective_message
+        chat = update.effective_chat
+        if msg is None or not msg.text:
+            return
+        # Allowlist checks
+        if allowed and chat.id not in allowed:
+            return
+        scan_chats = _scan_chats()
+        if scan_chats and chat.id not in scan_chats:
+            return
+        text = msg.text.strip()
+        if not text:
+            return
+        # Dedup: reuse slack_tickets store (channel = str(chat.id), ts = str(msg.message_id))
+        try:
+            from storage import slack_tickets as st
+            chan_key = str(chat.id)
+            ts_key = str(msg.message_id)
+            if st.already_seen(chan_key, ts_key, text):
+                return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("telegram dedup check failed: %s", e)
+            return
+        # Classify
+        try:
+            from communication.ticket_detector import classify
+            result = classify(text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("telegram ticket classify failed: %s", e)
+            return
+        try:
+            st.mark_seen(chan_key, ts_key, text, was_ticket=result.ticket, summary=result.summary)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("telegram mark_seen failed: %s", e)
+        if not result.ticket:
+            return
+        # Store as pending and send confirmation prompt
+        user = update.effective_user
+        username = user.username or str(user.id)
+        pending_id = f"tg:{chat.id}:{msg.message_id}"
+        try:
+            st.add_pending(
+                pending_id,
+                channel=chan_key,
+                thread_ts=ts_key,
+                user=username,
+                task=result.summary or text[:400],
+                raw=text,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("telegram add_pending failed: %s", e)
+            return
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Start", callback_data=f"aic:ticket_start:{pending_id}"),
+            InlineKeyboardButton("❌ Skip",  callback_data=f"aic:ticket_skip:{pending_id}"),
+        ]])
+        await msg.reply_text(
+            f"🎫 *Ticket detected* (confidence {result.confidence:.0%})\n_{result.summary[:300]}_\n\n"
+            f"Start an AI workflow for this?",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+
     async def on_callback(update, context):
         cq = update.callback_query
         await cq.answer()
         data = (cq.data or "").split(":")
-        if len(data) != 3 or data[0] != "aic":
+        if not data or data[0] != "aic":
             return
-        _, action, wid = data
-        d: TelegramDispatcher = state["dispatcher"]
-        if action == "approve":
-            d.resume(workflow_id=wid, decision={"approved": True})
+        if len(data) == 3 and data[1] in ("approve", "reject"):
+            _, action, wid = data
+            d: TelegramDispatcher = state["dispatcher"]
+            if action == "approve":
+                d.resume(workflow_id=wid, decision={"approved": True})
+                await cq.edit_message_reply_markup(reply_markup=None)
+                await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✅ approved `{wid}`", parse_mode="Markdown")
+            elif action == "reject":
+                d.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by {cq.from_user.username or cq.from_user.id}"})
+                await cq.edit_message_reply_markup(reply_markup=None)
+                await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✋ rejected `{wid}`", parse_mode="Markdown")
+            return
+        # Ticket start / skip — pending_id may contain colons (tg:chatid:msgid)
+        if len(data) >= 3 and data[1] in ("ticket_start", "ticket_skip"):
+            action = data[1]
+            pending_id = ":".join(data[2:])
+            try:
+                from storage import slack_tickets as st
+                ticket = st.pop_pending(pending_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("telegram pop_pending failed: %s", e)
+                ticket = None
             await cq.edit_message_reply_markup(reply_markup=None)
-            await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✅ approved `{wid}`", parse_mode="Markdown")
-        elif action == "reject":
-            d.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by {cq.from_user.username or cq.from_user.id}"})
-            await cq.edit_message_reply_markup(reply_markup=None)
-            await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✋ rejected `{wid}`", parse_mode="Markdown")
+            if ticket is None:
+                await context.bot.send_message(chat_id=cq.message.chat_id, text="⚠️ Ticket already handled or expired.")
+                return
+            if action == "ticket_skip":
+                await context.bot.send_message(chat_id=cq.message.chat_id, text="⏭ Ticket skipped.")
+                return
+            # Start workflow
+            d: TelegramDispatcher = state["dispatcher"]
+            chat_id = int(ticket.channel)
+            wid = d.start_workflow(task=ticket.task, chat_id=chat_id, user=ticket.user)
+            await context.bot.send_message(
+                chat_id=cq.message.chat_id,
+                text=f"🟢 started workflow `{wid}` for _{ticket.task[:200]}_",
+                parse_mode="Markdown",
+            )
+
+    from telegram.ext import MessageHandler, filters
+    if _auto_detect_on():
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     application.add_handler(CommandHandler("ai_run", cmd_ai_run))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^aic:"))

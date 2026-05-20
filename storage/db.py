@@ -25,6 +25,10 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    # Perf: 64 MiB page cache + 256 MiB mmap — safe on 1-2 GB free-tier VMs.
+    conn.execute("PRAGMA cache_size = -65536")    # negative = KiB → 64 MiB
+    conn.execute("PRAGMA mmap_size = 268435456")  # 256 MiB
+    conn.execute("PRAGMA temp_store = MEMORY")
     return conn
 
 
