@@ -1,5 +1,18 @@
 # ai_company — TODO / pending decisions
 
+> **What this is.** A semi-autonomous multi-agent coding orchestrator. LangGraph
+> state machine that takes a task, plans it, edits files, runs tests, and asks
+> a human to approve at three checkpoints (plan → code → commit). One process
+> exposes a Streamlit dashboard, a Slack bot, a Telegram bot, a Voice panel, an
+> OpenAI-compatible HTTP shim (for glass / LangChain / curl), and a CLI.
+>
+> Free by default: rotates across OpenRouter/Groq/NVIDIA NIM free tiers + Ollama
+> local; falls back to Anthropic only if you set `ANTHROPIC_API_KEY`. Per-call
+> cost recorded in SQLite; budget guards + circuit breaker prevent runaway
+> spend. Memory: SQLite FTS5 by default, semantic via Ollama or
+> sentence-transformers when available, mirrored to an Obsidian vault when
+> `OBSIDIAN_VAULT_PATH` is set. 237/237 tests pass.
+
 Living list of things on hold or worth doing next. Closed items get crossed
 out, not deleted, so the history of what was considered stays visible.
 
@@ -76,5 +89,49 @@ out, not deleted, so the history of what was considered stays visible.
 - [x] Phase U — Obsidian-copilot setup docs (f0bb5d8)
 - [x] Phase V — Cost budgets + per-provider circuit breaker (07b9057)
 - [x] Phase W — Web search cascade (Brave/Serper/Tavily/DDG) (c7039aa)
-- [x] Phase X — Multi-agent crew (Planner/Critic with bus) (linter commit)
-- [x] Phase Y — Multi-cloud Terraform: AWS/GCP/Azure/Hetzner/DO + Oracle (b0ef172)
+- [x] Phase X — Multi-agent crew (Planner/Critic + Reviewer/Tester) (b34f437)
+- [x] Phase Y — Multi-cloud Terraform: Oracle + AWS + GCP + Azure + Hetzner + DigitalOcean (b0ef172)
+- [x] Glass wiring + minimal Claude-style SPA at /ui + /v1/workflows API (42f76a9)
+- [x] PR review CLI extension — severity tags, crew mode, GH Action, inline fix suggestions (f138882)
+- [x] Live workflow run end-to-end — agent committed 51b710c via Groq for $0
+- [x] Vision support — image content blocks routed to Anthropic / OpenRouter (e5203ac)
+- [x] Plan/analyze/review prompt tuning — 60% fewer tokens, no filler steps (71271aa)
+- [x] Production hardening — JSON logs + /v1/metrics Prometheus + optional Sentry (745c798)
+
+## What it can do today
+
+Run a task end-to-end:
+```
+.venv/bin/python cli.py run "Add a --version flag to cli.py"
+```
+
+Or via the dashboard:
+```
+.venv/bin/streamlit run ui/dashboard.py
+```
+
+Or the OpenAI-compatible HTTP shim (for glass / LangChain / curl / Obsidian):
+```
+.venv/bin/python -m api.server                  # 127.0.0.1:8765
+curl -s http://localhost:8765/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"simple","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Or chat from Slack / Telegram:
+```
+SLACK_BOT_TOKEN=... SLACK_APP_TOKEN=... .venv/bin/python -m communication.slack
+TELEGRAM_BOT_TOKEN=...                  .venv/bin/python -m communication.telegram
+```
+
+Interfaces summary:
+
+| Surface | Path | What it does |
+|---|---|---|
+| Dashboard | `streamlit run ui/dashboard.py` → http://localhost:8501 | Plan/code/commit checkpoints, live token narration, voice mic, git panel with revert, queue, memory search |
+| Minimal SPA | http://localhost:8765/ui | Claude-style chat, talks straight to /v1/chat/completions |
+| CLI | `cli.py run/providers/queue/memory/obsidian/voice/web/free-models/accounting/check` | All of the above without Streamlit |
+| HTTP shim | http://localhost:8765/v1 | OpenAI-compatible chat + models + metrics endpoints |
+| Slack bot | `/ai-run <task>` | Per-checkpoint Block Kit buttons + PNG + voice MP3 |
+| Telegram bot | `/ai_run <task>` | Inline keyboard + PNG + voice MP3 |
+| GH Action | `.github/workflows/pr-review.yml` | Auto PR review with severity tags + crew mode |
