@@ -73,3 +73,57 @@ each provider's main.tf via Terraform's `templatefile()`.
 - ARM is preferred everywhere because the cloud-init uses
   `python3.11-pip` from the distro repos, which is available on both
   arches but ARM is cheaper.
+
+## Phase Z / Z2 — self-improvement on cloud deploys
+
+The new layers write state to disk. Make sure `data/` is on a
+volume that survives reboots and re-deploys. Default cloud-init
+puts the repo at `/opt/ai-company` and writes to `/opt/ai-company/data/`,
+which lives on the root volume — fine for single-node, but back it up.
+
+Paths the new layers write to (relative to `/opt/ai-company`):
+
+| Path | Written by | Why it matters |
+|---|---|---|
+| `data/langgraph.sqlite`   | LangGraph SqliteSaver       | In-progress workflows. Losing it = users stuck at checkpoints can't resume. |
+| `data/learned_prompts.json` | `cli.py tune auto`        | DSPy-tuned prompts. Losing it = revert to base prompts (safe, just dumber). |
+| `data/auto_state.json`    | `cli.py tune auto`          | Watermark — last retrospective count per task_type. Losing it = next tune pulls the full history again (waste, not wrong). |
+| `data/ai_company.sqlite`  | accounting + retrospectives | The historical signal that feeds the tuner. **Back this up.** |
+
+### Cron the tuner
+
+Add to the systemd unit or via crontab:
+
+```cron
+0 3 * * * cd /opt/ai-company && .venv/bin/python cli.py tune auto >> data/tune.log 2>&1
+```
+
+The tuner is idempotent and cheap when nothing changed; safe to run
+hourly if you want faster adaptation.
+
+### Backup / restore
+
+Single command:
+
+```bash
+tar -czf ai-company-backup-$(date +%F).tar.gz \
+    /opt/ai-company/data/ai_company.sqlite \
+    /opt/ai-company/data/langgraph.sqlite \
+    /opt/ai-company/data/learned_prompts.json \
+    /opt/ai-company/data/auto_state.json
+```
+
+Stash to S3 / GCS / Backblaze as part of the nightly cron.
+
+### Activating on a cloud deploy
+
+After `terraform apply`, SSH in and edit `/opt/ai-company/.env`. The
+relevant block is at the bottom of the templated `.env` (mirrors
+`.env.example`). Uncomment the flags you want, then:
+
+```bash
+sudo systemctl restart ai-company
+```
+
+All new layers default-off — a vanilla deploy behaves identically to
+pre-Phase-Z. Opt in per layer as you trust each one.

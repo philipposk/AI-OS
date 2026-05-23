@@ -11,7 +11,17 @@
 > cost recorded in SQLite; budget guards + circuit breaker prevent runaway
 > spend. Memory: SQLite FTS5 by default, semantic via Ollama or
 > sentence-transformers when available, mirrored to an Obsidian vault when
-> `OBSIDIAN_VAULT_PATH` is set. 237/237 tests pass.
+> `OBSIDIAN_VAULT_PATH` is set. **318/318 tests pass.**
+>
+> **Phase Z + Z2 wired (self-improvement):** persistent LangGraph state
+> (`LANGGRAPH_CHECKPOINT_DB`), retrospective node after every commit,
+> json_repair on malformed LLM JSON, litellm as default provider
+> (`LITELLM_PRIMARY=1`), instructor+pydantic typed plan/review
+> (`USE_STRUCTURED_OUTPUTS=1`), DSPy MIPROv2 prompt tuning from
+> retrospectives (`cli.py tune auto`), per-(provider, model, task_type)
+> success-rate auto-pick (`USE_LEARNED_MODELS=1`), per-task tuned
+> prompts (`USE_LEARNED_PROMPTS=1`). Every layer default-off and
+> back-compat; falls back to legacy path on any error.
 
 Living list of things on hold or worth doing next. Closed items get crossed
 out, not deleted, so the history of what was considered stays visible.
@@ -137,3 +147,32 @@ Interfaces summary:
 | Slack bot | `/ai-run <task>` | Per-checkpoint Block Kit buttons + PNG + voice MP3 |
 | Telegram bot | `/ai_run <task>` | Inline keyboard + PNG + voice MP3 |
 | GH Action | `.github/workflows/pr-review.yml` | Auto PR review with severity tags + crew mode |
+| Tune cron | `cli.py tune auto` (cron'd) | Re-optimises prompts when retrospective count crosses `AUTO_TUNE_MIN_NEW` per task_type |
+| Model-perf | `cli.py model-perf [--best]` | Per-(provider, model, task_type) success-rate from joined ledger+retrospectives |
+
+## Self-improvement layers (Phase Z + Z2)
+
+All default-off, fall back to legacy path on any error. Activate by adding to `.env`:
+
+```bash
+LANGGRAPH_CHECKPOINT_DB=./data/langgraph.sqlite   # persistent workflow state
+USE_LEARNED_PROMPTS=1                              # DSPy-tuned prompts (after first tune)
+USE_LEARNED_MODELS=1                               # router auto-picks from history
+LITELLM_PRIMARY=1                                  # litellm as default provider
+LITELLM_DEFAULT_MODEL=groq/llama-3.3-70b-versatile
+USE_STRUCTURED_OUTPUTS=1                           # instructor+pydantic plan/review
+STRUCTURED_MODEL=groq/llama-3.3-70b-versatile
+AUTO_TUNE_MIN_TOTAL=20                             # cron threshold for tune auto
+AUTO_TUNE_MIN_NEW=10
+```
+
+Cron:
+```cron
+0 3 * * * cd /opt/ai-company && .venv/bin/python cli.py tune auto >> data/tune.log 2>&1
+```
+
+Inspection:
+```bash
+cli.py tune status        # retrospective counts + learned prompts on disk
+cli.py model-perf --best  # winner per task_type
+```

@@ -8,7 +8,7 @@ anything is committed.
 Free by default: rotates across OpenRouter / Groq / NVIDIA NIM free tiers
 plus Ollama local; only falls back to Anthropic if you set
 `ANTHROPIC_API_KEY`. Per-call cost is recorded in SQLite; budget guards
-and a per-provider circuit breaker prevent runaway spend. **237/237
+and a per-provider circuit breaker prevent runaway spend. **318/318
 tests pass; no live LLM calls in CI.**
 
 > **New here / non-technical reader?** Start with
@@ -293,23 +293,48 @@ using `gh`. Flags:
 
 Runs in CI via [.github/workflows/pr-review.yml](.github/workflows/pr-review.yml).
 
-## Prompt tuning (DSPy MIPROv2)
+## Self-improvement loop (Phase Z / Z2)
 
-Every workflow stores a retrospective in
-[storage/retrospectives.py](storage/retrospectives.py). The tuner in
-[tuning/tuner.py](tuning/tuner.py) periodically optimises the
-`analyze` / `plan` / `code` / `review` prompts against accumulated
-retrospectives.
+After every commit, `do_retrospective` writes a row to
+[storage/retrospectives.py](storage/retrospectives.py) — verdict, cost,
+test retries, plus a one-line LLM self-critique. That history feeds two
+auto-pick layers:
+
+```
+workflow runs
+  ↓ retrospective row (verdict + cost + retries)
+  ↓ joined with ledger rows by workflow_id
+  ↓ storage.model_performance.best_model_for(task_type)   ← USE_LEARNED_MODELS=1
+  ↓ tuning.auto_tune (cron) → tuning/learned_prompts.json ← USE_LEARNED_PROMPTS=1
+  ↓ next workflow uses tuned prompts + learned models
+```
 
 ```bash
 python cli.py tune status            # retrospective counts + on-disk learned prompts
-python cli.py tune run plan          # optimise the plan prompt now
+python cli.py tune run --task-type plan
 python cli.py tune auto              # cron-friendly: tune any task_type that crossed threshold
+python cli.py model-perf             # per-(provider, model, task_type) success rates
+python cli.py model-perf --best      # winner per task_type
 ```
 
-Per-(provider, model, task_type) success rates:
-[storage/model_performance.py](storage/model_performance.py), shown by
-`cli.py model-perf`.
+### Activation env flags
+
+Every new layer is **default-off**. Set the flag(s) you want, restart.
+Each layer falls back to the legacy path if its dep or LLM call fails.
+
+| Flag | What it does |
+|---|---|
+| `LANGGRAPH_CHECKPOINT_DB=./data/langgraph.sqlite` | Persistent workflow state — survives process restart (langgraph-checkpoint-sqlite) |
+| `USE_LEARNED_PROMPTS=1` + `LEARNED_PROMPTS_PATH=…` | Plan/analyze/review nodes read tuned prompts from JSON instead of hardcoded strings |
+| `USE_LEARNED_MODELS=1` + `BEST_MODEL_MAX_COST_PER_CALL=0.05` | `router.resolve()` auto-picks the highest-success (provider, model) from retrospective history |
+| `AUTO_TUNE_MIN_TOTAL=20` + `AUTO_TUNE_MIN_NEW=10` + `AUTO_TUNE_STATE_PATH=…` | Threshold/watermark for `cli.py tune auto`. Atomic JSON writes — concurrent cron-safe |
+| `LITELLM_PRIMARY=1` + `LITELLM_DEFAULT_MODEL=groq/llama-3.3-70b-versatile` + `LITELLM_TASK_MODEL_<TASK>=…` | Litellm becomes default provider for any task_type lacking an explicit `ROUTER_MODEL_<TASK>` pin |
+| `USE_STRUCTURED_OUTPUTS=1` + `STRUCTURED_MODEL=…` | Plan + review nodes use instructor + pydantic for typed outputs (no more JSON-repair fallbacks) |
+
+Cron example:
+```cron
+0 3 * * * cd /opt/ai-company && .venv/bin/python cli.py tune auto >> data/tune.log 2>&1
+```
 
 ## Production hardening
 
@@ -420,7 +445,7 @@ ai_company/
 │   ├── common/                     # shared cloud-init + systemd unit
 │   ├── modules/
 │   └── {oracle,aws,gcp,azure,hetzner,digitalocean}/
-├── tests/                          # 42 test files, 237 tests, no live LLM calls
+├── tests/                          # 48 test files, 318 tests, no live LLM calls
 ├── docs/
 │   ├── glass-setup.md
 │   ├── obsidian.md
@@ -436,7 +461,7 @@ ai_company/
 ## Testing
 
 ```bash
-pytest -q                                 # 237 tests
+pytest -q                                 # 318 tests
 pytest tests/test_graph.py -v             # orchestrator integration with stubs
 pytest tests/test_providers.py -v         # per-provider request/response shape
 pytest tests/test_api_server.py -v        # FastAPI shim + /v1/workflows

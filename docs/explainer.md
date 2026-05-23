@@ -203,12 +203,30 @@ is committed.
 | Works from Slack / Telegram / voice | no | yes |
 | Tracks spend | no | per-call ledger |
 | Self-improves over time | no | yes — DSPy MIPROv2 re-tunes prompts from past runs |
+| Auto-picks the best model | no | yes — tracks per-(provider, model, task) success rates and routes to the winner |
+| Typed outputs from any LLM | no | yes — pydantic schemas via instructor + litellm |
+| State survives a restart | no | yes — persistent LangGraph checkpointer |
 
-That last row is the sleeper feature: every workflow saves a
-"retrospective" (what went well, what failed). A background tuner
-periodically re-optimises the analyze/plan/code/review prompts using
-those retrospectives. The robot gets better at *your* projects over
-time.
+The last four rows are the **self-improvement loop** (Phase Z + Z2):
+
+1. Every workflow ends with a `do_retrospective` node that writes the
+   outcome (success / tests-failed / rejected / budget-abort) to
+   SQLite, along with cost, retries, and a one-line LLM self-critique.
+2. A **cron job** (`cli.py tune auto`) reads accumulated retrospectives
+   and uses **DSPy MIPROv2** to optimise the analyze/plan/review system
+   prompts. Saved to `tuning/learned_prompts.json`.
+3. The router uses joined ledger+retrospective data to pick the
+   highest-success `(provider, model)` for each task type — so if Groq
+   Llama keeps producing successful plans for *your* repo, it wins.
+4. The next workflow uses the tuned prompts and the learned model.
+
+Every layer is **off by default** and controlled by an env flag
+(`USE_LEARNED_PROMPTS`, `USE_LEARNED_MODELS`, `USE_STRUCTURED_OUTPUTS`,
+`LITELLM_PRIMARY`, `LANGGRAPH_CHECKPOINT_DB`, `AUTO_TUNE_*`). If a layer
+errors mid-call, the orchestrator falls back to the legacy path
+silently. You can flip them on one at a time and roll back without
+re-deploying. See README → "Self-improvement loop" for the activation
+table.
 
 ## What it is NOT
 
