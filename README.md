@@ -11,6 +11,10 @@ plus Ollama local; only falls back to Anthropic if you set
 and a per-provider circuit breaker prevent runaway spend. **237/237
 tests pass; no live LLM calls in CI.**
 
+> **New here / non-technical reader?** Start with
+> [docs/explainer.md](docs/explainer.md) — plain-English tour of what
+> this is, who it's for, and the ten most common use-cases.
+
 ```
 User ──► CLI │ Streamlit dashboard │ Minimal SPA │ Slack bot │ Telegram bot │ OpenAI HTTP shim
                                           │
