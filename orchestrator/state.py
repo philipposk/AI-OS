@@ -70,3 +70,7 @@ class GraphState(TypedDict, total=False):
 
     # Phase W: multi-agent crew toggle (state beats $CREW_MODE env)
     crew_mode: Optional[bool]
+
+    # Phase Z: retrospective snapshot written after commit. Shape:
+    # {"verdict": str, "notes": str, "cost_usd": float}
+    retrospective: Optional[dict]

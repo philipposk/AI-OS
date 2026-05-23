@@ -8,6 +8,8 @@ anthropic>=0.40,<1
 
 # Orchestration (wired in Phase C)
 langgraph>=0.2.50,<0.5
+# Persistent workflow state (opt-in via $LANGGRAPH_CHECKPOINT_DB)
+langgraph-checkpoint-sqlite>=2.0,<4
 
 # UI
 streamlit>=1.36,<2
@@ -26,6 +28,17 @@ slack-sdk>=3.27,<4
 # Per-checkpoint media (Phase Q): screenshot card + voice note
 pillow>=10,<12
 edge-tts>=6.1,<8     # optional; voice falls back to silent if missing
+
+# Phase Z: self-improvement
+# litellm = unified-provider client + LITELLM_PRIMARY=1 default
+litellm>=1.50,<2
+# dspy-ai = prompt tuning from retrospectives (`cli.py tune run` / `cli.py tune auto`)
+dspy-ai>=2.5,<4
+# json_repair = tolerate malformed LLM JSON in _extract_json_array
+json-repair>=0.30,<1
+# instructor + pydantic = USE_STRUCTURED_OUTPUTS=1 typed plan/review
+instructor>=1.5,<2
+pydantic>=2.5,<3
 
 # Test
 pytest>=8.0,<9

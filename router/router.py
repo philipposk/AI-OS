@@ -28,6 +28,7 @@ from storage.accounting import record as record_call
 from .anthropic_client import AnthropicClient
 from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
 from .groq_client import GroqClient
+from .litellm_client import LiteLLMClient
 from .nvidia_client import NvidiaClient
 from .ollama_client import OllamaClient
 from .openrouter_client import OpenRouterClient
@@ -38,7 +39,9 @@ logger = logging.getLogger(__name__)
 
 # Fallback chain when a task_type has no explicit override and the preferred
 # provider for that model id is unavailable. Order = preference.
-DEFAULT_PROVIDER_ORDER = ("anthropic", "openrouter", "groq", "nvidia", "ollama")
+# `litellm` sits at the end — only used when an explicit `litellm:<model>`
+# is given, or when every dedicated client is unavailable.
+DEFAULT_PROVIDER_ORDER = ("anthropic", "openrouter", "groq", "nvidia", "ollama", "litellm")
 
 # Default model per task_type if env var not set. Picked to be cheap-or-free.
 DEFAULT_TASK_MODELS: Dict[str, str] = {
@@ -107,6 +110,7 @@ class ModelRouter:
                 "groq": GroqClient(),
                 "nvidia": NvidiaClient(),
                 "ollama": OllamaClient(),
+                "litellm": LiteLLMClient(),
             }
         self.providers = providers
 
@@ -119,10 +123,58 @@ class ModelRouter:
                 *, require_vision: bool = False) -> tuple[str, str]:
         """Return (provider_name, model). Picks the first available in fallback chain.
         Providers whose circuit breaker is open are skipped automatically.
-        `require_vision=True` restricts the search to vision-capable providers."""
+        `require_vision=True` restricts the search to vision-capable providers.
+
+        Selection precedence (high → low):
+          1. `override_model` argument (explicit caller intent)
+          2. `$USE_LEARNED_MODELS=1` + retrospectives data → best historical
+             (provider, model) for this task_type
+          3. `$LITELLM_PRIMARY=1` → litellm provider for any task_type that
+             doesn't have an explicit `$ROUTER_MODEL_<TASK>` override; the
+             model id is `$LITELLM_TASK_MODEL_<TASK>` if set, else
+             `$LITELLM_DEFAULT_MODEL`, else the LiteLLMClient default.
+          4. `$ROUTER_MODEL_<TASK>` env var
+          5. `DEFAULT_TASK_MODELS[task_type]` constant
+        """
         from .circuit import get_breaker
         from .vision import VISION_CAPABLE
         bk = get_breaker()
+        # Step 2: learned-model auto-pick. Cheap query but guarded by env
+        # so noisy early data can't override the safe defaults.
+        if override_model is None and os.getenv("USE_LEARNED_MODELS", "").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from storage.model_performance import best_model_for
+                best = best_model_for(task_type)
+            except Exception:  # noqa: BLE001
+                best = None
+            if best is not None:
+                bp, bm = best
+                prov = self.providers.get(bp)
+                if prov and prov.is_available() and not bk.is_open(bp):
+                    if require_vision and bp not in VISION_CAPABLE:
+                        pass  # fall through to default selection
+                    else:
+                        return bp, bm
+        # Step 3: litellm primacy. When the user has set $LITELLM_PRIMARY=1
+        # and litellm is available, prefer it for every task_type that
+        # lacks an explicit per-task ROUTER_MODEL_<TASK> override. The
+        # explicit overrides still win so users can pin one task to a
+        # dedicated provider while letting litellm handle the rest.
+        if (
+            override_model is None
+            and os.getenv("LITELLM_PRIMARY", "").strip().lower() in ("1", "true", "yes", "on")
+            and not os.getenv(f"ROUTER_MODEL_{task_type.upper()}", "").strip()
+        ):
+            litellm_prov = self.providers.get("litellm")
+            if (litellm_prov and litellm_prov.is_available()
+                    and not bk.is_open("litellm")
+                    and (not require_vision or "litellm" in VISION_CAPABLE)):
+                model = (
+                    os.getenv(f"LITELLM_TASK_MODEL_{task_type.upper()}", "").strip()
+                    or os.getenv("LITELLM_DEFAULT_MODEL", "").strip()
+                    or litellm_prov.default_model()
+                )
+                return "litellm", model
         model_id = override_model or os.getenv(
             f"ROUTER_MODEL_{task_type.upper()}",
             DEFAULT_TASK_MODELS.get(task_type, DEFAULT_TASK_MODELS["simple"]),

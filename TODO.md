@@ -97,6 +97,8 @@ out, not deleted, so the history of what was considered stays visible.
 - [x] Vision support — image content blocks routed to Anthropic / OpenRouter (e5203ac)
 - [x] Plan/analyze/review prompt tuning — 60% fewer tokens, no filler steps (71271aa)
 - [x] Production hardening — JSON logs + /v1/metrics Prometheus + optional Sentry (745c798)
+- [x] Phase Z — persistent checkpointer (LANGGRAPH_CHECKPOINT_DB), retrospective node, json_repair, litellm parallel provider, dspy prompt-tune scaffold (318 tests)
+- [x] Phase Z2 — auto-tune cron (`cli.py tune auto`), per-model success-rate tracking + USE_LEARNED_MODELS=1 router auto-pick, instructor+pydantic structured outputs (USE_STRUCTURED_OUTPUTS=1), LITELLM_PRIMARY=1 default-provider toggle. Atomic watermark writes. Reviewer-audited.
 
 ## What it can do today
 

@@ -403,6 +403,25 @@ def build_parser() -> argparse.ArgumentParser:
     wsearch.add_argument("-k", "--top", type=int, default=5)
     w.set_defaults(func=cmd_web)
 
+    mp = sub.add_parser("model-perf", help="Per-(provider, model, task_type) success rates from retrospectives")
+    mp.add_argument("--task-type", default=None,
+                    help="Filter to one task_type (analyze/plan/code/review/...)")
+    mp.add_argument("--best", action="store_true",
+                    help="Show only the best model per task_type")
+    mp.add_argument("--min-workflows", type=int, default=5)
+    mp.set_defaults(func=cmd_model_perf)
+
+    tn = sub.add_parser("tune", help="DSPy prompt tuning from retrospectives")
+    tnsub = tn.add_subparsers(dest="tune_cmd", required=True)
+    tnsub.add_parser("status", help="Show retrospective counts + learned prompts on disk")
+    tnrun = tnsub.add_parser("run", help="Run MIPROv2 on accumulated retrospectives")
+    tnrun.add_argument("--task-type", choices=("analyze", "plan", "review"), default="plan")
+    tnrun.add_argument("--min-examples", type=int, default=5)
+    tnauto = tnsub.add_parser("auto", help="Cron-friendly: tune any task_type whose new-retrospective delta crossed threshold")
+    tnauto.add_argument("--min-total", type=int, default=20)
+    tnauto.add_argument("--min-new", type=int, default=10)
+    tn.set_defaults(func=cmd_tune)
+
     sk = sub.add_parser("slack", help="Manage Slack pending-ticket queue")
     sksub = sk.add_subparsers(dest="slack_cmd", required=True)
     skl = sksub.add_parser("list", help="List pending Slack tickets")
@@ -414,6 +433,81 @@ def build_parser() -> argparse.ArgumentParser:
     sk.set_defaults(func=cmd_slack)
 
     return p
+
+
+def cmd_model_perf(args: argparse.Namespace) -> int:
+    """Print per-model success rates from joined ledger+retrospectives."""
+    from storage import model_performance as mp
+
+    if args.best:
+        out = {}
+        for tt in ("analyze", "plan", "code", "review"):
+            choice = mp.best_model_for(tt, min_workflows=args.min_workflows)
+            out[tt] = {"provider": choice[0], "model": choice[1]} if choice else None
+        print(json.dumps(out, indent=2))
+        return 0
+
+    rows = mp.report(task_type=args.task_type)
+    print(json.dumps([
+        {
+            "provider": r.provider, "model": r.model, "task_type": r.task_type,
+            "n_workflows": r.n_workflows, "n_successes": r.n_successes,
+            "success_rate": round(r.success_rate, 4),
+            "avg_retries": round(r.avg_retries, 2),
+            "avg_cost_per_call": round(r.avg_cost_per_call, 6),
+        }
+        for r in rows
+    ], indent=2))
+    return 0
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    """DSPy prompt tuning entry point.
+
+    `status` — show retrospective counts + which prompts have been learned.
+    `run`    — pull training set from retrospectives, run MIPROv2 on the
+               chosen task_type, save to tuning/learned_prompts.json.
+    """
+    from storage import retrospectives as r
+    from tuning import (
+        LEARNED_PROMPTS_PATH, PromptTuner, load_learned_prompts,
+        training_examples_from_retrospectives,
+    )
+
+    if args.tune_cmd == "status":
+        agg = r.aggregate()
+        learned = load_learned_prompts()
+        print(json.dumps({
+            "retrospectives": agg,
+            "learned_prompts_path": str(LEARNED_PROMPTS_PATH),
+            "learned_task_types": sorted(learned.keys()),
+        }, indent=2))
+        return 0
+
+    if args.tune_cmd == "run":
+        examples = training_examples_from_retrospectives(min_per_class=args.min_examples)
+        if not examples:
+            print(f"need at least {args.min_examples} positive and {args.min_examples} negative "
+                  f"retrospectives — run more workflows first.")
+            return 1
+        tuner = PromptTuner()
+        result = tuner.tune(args.task_type, examples=examples)
+        path = tuner.save([result])
+        print(json.dumps({
+            "task_type": result.task_type,
+            "n_examples": result.n_examples,
+            "changed": result.tuned_prompt != result.base_prompt,
+            "saved_to": str(path),
+        }, indent=2))
+        return 0
+
+    if args.tune_cmd == "auto":
+        from tuning import auto_tune
+        report = auto_tune(min_total=args.min_total, min_new=args.min_new)
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+
+    return 1
 
 
 def cmd_web(args):

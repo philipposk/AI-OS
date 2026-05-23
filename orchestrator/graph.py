@@ -1,12 +1,39 @@
 """Top-level LangGraph: analyze → plan → [HUMAN] → code → test → [HUMAN] → review → [HUMAN] → commit."""
 from __future__ import annotations
 
+import logging
+import os
+import sqlite3
 import uuid
 from typing import Any, Dict, Iterable, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
+
+_log = logging.getLogger(__name__)
+
+
+def default_checkpointer() -> Any:
+    """Return a persistent SqliteSaver if `LANGGRAPH_CHECKPOINT_DB` is set,
+    else fall back to in-memory `MemorySaver`.
+
+    Persistent checkpointing means workflows survive process restarts —
+    users waiting at a human-in-the-loop checkpoint can resume after the
+    server is bounced. MemorySaver is fine for tests and one-shot CLI runs.
+    """
+    db_path = os.getenv("LANGGRAPH_CHECKPOINT_DB", "").strip()
+    if not db_path:
+        return MemorySaver()
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+    except ImportError:
+        _log.warning("LANGGRAPH_CHECKPOINT_DB=%s but langgraph-checkpoint-sqlite "
+                     "not installed; falling back to MemorySaver", db_path)
+        return MemorySaver()
+    # check_same_thread=False so Streamlit / FastAPI worker threads can share it.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    return SqliteSaver(conn)
 
 from .checkpoints import (
     review_budget_checkpoint,
@@ -19,6 +46,7 @@ from .nodes import (
     code_node,
     commit_node,
     plan_node,
+    retrospective_node,
     review_node,
     search_node,
     test_node,
@@ -85,6 +113,7 @@ def build_graph(checkpointer: Optional[Any] = None):
     g.add_node("do_review", review_node)
     g.add_node("checkpoint_commit", review_commit_checkpoint)
     g.add_node("do_commit", commit_node)
+    g.add_node("do_retrospective", retrospective_node)
     g.add_node("checkpoint_budget", review_budget_checkpoint)
     g.add_node("do_search", search_node)
 
@@ -110,7 +139,10 @@ def build_graph(checkpointer: Optional[Any] = None):
     g.add_conditional_edges("do_review", _budget_or("checkpoint_commit"),
                             {"checkpoint_commit": "checkpoint_commit", "checkpoint_budget": "checkpoint_budget"})
     g.add_conditional_edges("checkpoint_commit", _after_commit_review, {"do_commit": "do_commit", END: END})
-    g.add_edge("do_commit", END)
+    # Phase Z: every committed workflow runs a retrospective for self-improvement.
+    # Set $RETROSPECTIVE_DISABLED=1 to skip (e.g. CI runs that don't want LLM cost).
+    g.add_edge("do_commit", "do_retrospective")
+    g.add_edge("do_retrospective", END)
     g.add_conditional_edges(
         "checkpoint_budget",
         _after_budget,
@@ -118,7 +150,7 @@ def build_graph(checkpointer: Optional[Any] = None):
          "do_review": "do_review", END: END},
     )
 
-    return g.compile(checkpointer=checkpointer or MemorySaver())
+    return g.compile(checkpointer=checkpointer or default_checkpointer())
 
 
 # ---------- convenience runner ----------

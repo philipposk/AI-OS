@@ -41,7 +41,12 @@ def _extract_json_array(text: str) -> List[dict]:
     end = text.rfind("]")
     if start == -1 or end == -1 or end <= start:
         raise ValueError("no JSON array in role output")
-    return json.loads(text[start:end + 1])
+    blob = text[start:end + 1]
+    try:
+        from json_repair import repair_json
+        return json.loads(repair_json(blob))
+    except ImportError:
+        return json.loads(blob)
 
 
 def coordinate_plan(task: str, analysis: str, *, workflow_id: Optional[str] = None) -> List[dict]:
