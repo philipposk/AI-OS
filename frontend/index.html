@@ -146,5 +146,61 @@
 <div id="toast" class="toast"></div>
 
 <script type="module" src="app.js"></script>
+
+<!-- Page Assistant — grounded, voice-capable in-app helper. -->
+<!-- Widget talks to AI-OS /v1/llm/complete (same origin). No keys in browser. -->
+<!-- v0.2: authToken read from aios_token cookie; bearer header sent on every LLM round-trip. -->
+<script src="page-assistant.global.js"></script>
+<script>
+  const _aiosToken = document.cookie.match(/aios_token=([^;]+)/)?.[1] || "";
+  PageAssistant.init({
+    serverUrl: window.location.origin,
+    ...(_aiosToken ? { authToken: _aiosToken } : {}),
+    appName: "AI OS",
+    persona: "You are the AI OS assistant. You help users understand and operate the AI OS workflow orchestrator. AI OS is a multi-agent LangGraph coding system that runs locally — it reads files, plans changes, writes code, runs tests, and asks for human sign-off at each checkpoint (plan, code, commit) before touching anything.",
+    greeting: "Hi! I'm your AI OS assistant. I can explain how this tool works, help you write a task, or check system health.",
+    knowledge: "AI OS is a multi-agent coding orchestrator built with LangGraph. It breaks every task into a plan → code → review → commit pipeline with three human checkpoints. It routes LLM calls across free providers (OpenRouter, Groq, Anthropic, Ollama) with a budget cap. The UI here lets you start a task, watch the event timeline, and approve or reject at each checkpoint. Crew mode activates a coordinator + specialist sub-agents. Web search injects live results into the context.",
+    suggestions: [
+      "How do I start a coding task?",
+      "What is crew mode?",
+      "Explain the three human checkpoints",
+      "Check backend health"
+    ],
+    voice: false,
+    capabilities: [
+      {
+        name: "check_health",
+        description: "Check if the AI OS backend is healthy and which LLM providers are currently available.",
+        parameters: { type: "object", properties: {} },
+        run: async () => {
+          const r = await fetch("/health");
+          return r.json();
+        },
+        render: (r) =>
+          r.ok
+            ? `AI OS backend is online. Available providers: ${(r.providers || []).join(", ") || "none detected"}.`
+            : "AI OS backend is reporting an error."
+      },
+      {
+        name: "list_workflows",
+        description: "List active workflows currently cached in this AI OS session.",
+        parameters: { type: "object", properties: {} },
+        run: async () => {
+          const token = document.cookie.match(/aios_token=([^;]+)/)?.[1] || "";
+          const headers = token ? { Authorization: `Bearer ${token}` } : {};
+          const r = await fetch("/v1/workflows", { headers });
+          if (!r.ok) return { error: `${r.status}` };
+          return r.json();
+        },
+        render: (r) => {
+          if (r.error) return `Could not fetch workflows (${r.error}) — bearer token may be required.`;
+          const wfs = r.workflows || [];
+          if (!wfs.length) return "No active workflows in this session.";
+          return `${wfs.length} workflow(s): ${wfs.map(w => `${w.workflow_id.slice(0, 8)}… (${w.pending ? "waiting" : "done"})`).join(", ")}.`;
+        }
+      }
+    ]
+  });
+</script>
 </body>
 </html>

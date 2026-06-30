@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+json_repair = pytest.importorskip("json_repair")
+
 
 def test_handles_trailing_comma():
     from orchestrator.nodes import _extract_json_array

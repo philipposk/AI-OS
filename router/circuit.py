@@ -61,7 +61,7 @@ class CircuitBreaker:
         return s
 
     def is_open(self, provider: str, now: float | None = None) -> bool:
-        now = now or time.time()
+        now = time.time() if now is None else now
         with self._lock:
             s = self._state(provider)
             if s.opened_at == 0.0:
@@ -113,12 +113,15 @@ class CircuitBreaker:
 
 
 _singleton: CircuitBreaker | None = None
+_singleton_lock = threading.Lock()
 
 
 def get_breaker() -> CircuitBreaker:
     global _singleton
     if _singleton is None:
-        _singleton = CircuitBreaker()
+        with _singleton_lock:
+            if _singleton is None:
+                _singleton = CircuitBreaker()
     return _singleton
 
 

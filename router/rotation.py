@@ -41,6 +41,8 @@ class FreeModel:
 
 class Rotator(ABC):
     PROVIDER: str = "base"
+    # Subclasses should override PREF as a class-level dict; do NOT mutate the
+    # base-class dict at runtime because all subclasses share it.
     PREF: dict[str, float] = {}
 
     @abstractmethod

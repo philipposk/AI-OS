@@ -132,7 +132,7 @@ def total_cost() -> float:
 
 def report(workflow_id: Optional[str] = None) -> dict:
     by_provider: dict[str, dict] = {}
-    total_cost = 0.0
+    report_total_cost = 0.0
     total_calls = 0
     total_in = 0
     total_out = 0
@@ -147,12 +147,12 @@ def report(workflow_id: Optional[str] = None) -> dict:
         total_calls += 1
         total_in += e.prompt_tokens
         total_out += e.completion_tokens
-        total_cost += e.cost_usd
+        report_total_cost += e.cost_usd
     return {
         "total_calls": total_calls,
         "total_prompt_tokens": total_in,
         "total_completion_tokens": total_out,
-        "total_cost_usd": round(total_cost, 6),
+        "total_cost_usd": round(report_total_cost, 6),
         "by_provider": {k: {**v, "cost_usd": round(v["cost_usd"], 6)} for k, v in by_provider.items()},
     }
 

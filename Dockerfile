@@ -24,4 +24,4 @@ EXPOSE 8501
 
 ENV AI_COMPANY_DB=/app/data/ai_company.sqlite
 
-CMD ["streamlit", "run", "ui/dashboard.py", "--server.headless", "true", "--server.port", "8501", "--server.address", "0.0.0.0", "--browser.gatherUsageStats", "false"]
+CMD ["streamlit", "run", "ui/dashboard.py", "--server.headless", "true", "--server.port", "8501", "--server.address", "127.0.0.1", "--browser.gatherUsageStats", "false"]

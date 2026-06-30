@@ -59,17 +59,23 @@ def review_budget_checkpoint(state: GraphState) -> Dict[str, Any]:
             state["budget_ceiling_usd"] to $1.50 and resume `budget_blocked.next`
     """
     blocked = state.get("budget_blocked") or {}
+    # Preserve the resume target in a separate field BEFORE the interrupt so
+    # _after_budget can still read it after _apply_budget_decision clears
+    # budget_blocked (the two writes happen in one state merge).
+    resume_node = blocked.get("next")
     decision = interrupt(
         {
             "kind": "budget_exceeded",
             "scope": blocked.get("scope"),
             "current_usd": blocked.get("current"),
             "limit_usd": blocked.get("limit"),
-            "next_node": blocked.get("next"),
+            "next_node": resume_node,
             "workflow_id": state.get("workflow_id"),
         }
     )
-    return _apply_budget_decision(decision)
+    result = _apply_budget_decision(decision)
+    result["budget_resume_node"] = resume_node if result.get("approved") else None
+    return result
 
 
 def _apply_budget_decision(decision: Any) -> Dict[str, Any]:

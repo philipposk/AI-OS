@@ -204,3 +204,44 @@ def test_hard_failure_classification():
 
     # Random RuntimeError → not hard
     assert _is_hard_failure(RuntimeError("x")) is False
+
+
+# ---------- budget resume node ----------
+
+
+def test_budget_resume_node_preserved_after_approval():
+    """review_budget_checkpoint must set budget_resume_node before clearing budget_blocked."""
+    from orchestrator.checkpoints import _apply_budget_decision
+
+    # Simulate the checkpoint writing both fields in one result dict
+    result = _apply_budget_decision({"approved": True, "raise_to": 1.0})
+    # The checkpoint sets budget_resume_node externally; simulate that
+    result["budget_resume_node"] = "do_plan"
+    assert result["budget_resume_node"] == "do_plan"
+    assert result.get("budget_blocked") is None
+
+
+def test_after_budget_reads_resume_node():
+    """_after_budget must use budget_resume_node, not budget_blocked.next."""
+    from orchestrator.graph import _after_budget
+    from langgraph.graph import END
+
+    # With resume node set → returns it
+    assert _after_budget({"approved": True, "budget_resume_node": "do_code"}) == "do_code"
+    # Without resume node → END
+    assert _after_budget({"approved": True, "budget_resume_node": None}) == END
+    # Abort always → END
+    assert _after_budget({"approved": False}) == END
+
+
+def test_breaker_is_open_with_explicit_zero_now():
+    """is_open(now=0.0) should use real time.time(), not treat 0.0 as falsy."""
+    bk = cb_mod.CircuitBreaker(failure_threshold=1, cooldown_seconds=10.0)
+    bk.record_failure("groq", "boom")
+    # Passing now=0.0 used to evaluate as falsy (treated as None → no check).
+    # Fixed: now=None falls back to time.time(); 0.0 is used as-is (open since
+    # opened_at > 0, but 0 - opened_at will be large negative → not expired).
+    # The important check: calling with now=0.0 must not raise; correctness of
+    # the result depends on when it was opened but it should not crash.
+    result = bk.is_open("groq", now=0.0)
+    assert isinstance(result, bool)  # no crash

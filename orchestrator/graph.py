@@ -69,11 +69,13 @@ def _budget_or(passthrough: str):
 def _after_budget(state: GraphState) -> str:
     """Resume from budget checkpoint back to whichever node was blocked,
     or END if the human aborted.
+
+    Reads budget_resume_node (set by review_budget_checkpoint before it clears
+    budget_blocked) so the target survives the budget_blocked→None write.
     """
     if not state.get("approved"):
         return END
-    blocked = state.get("budget_blocked") or {}
-    return blocked.get("next") or END
+    return state.get("budget_resume_node") or END
 
 
 def _after_plan_review(state: GraphState) -> str:
@@ -157,7 +159,21 @@ def build_graph(checkpointer: Optional[Any] = None):
 
 
 def new_workflow_id() -> str:
-    return uuid.uuid4().hex[:12]
+    return uuid.uuid4().hex
+
+
+_shared_graph: Optional[Any] = None
+_shared_graph_lock = __import__("threading").Lock()
+
+
+def _get_shared_graph() -> Any:
+    """Return the module-level shared graph, building it once on first call."""
+    global _shared_graph
+    if _shared_graph is None:
+        with _shared_graph_lock:
+            if _shared_graph is None:
+                _shared_graph = build_graph()
+    return _shared_graph
 
 
 def start(task: str, *, workflow_id: Optional[str] = None, graph=None) -> Iterable[Dict[str, Any]]:
@@ -165,14 +181,17 @@ def start(task: str, *, workflow_id: Optional[str] = None, graph=None) -> Iterab
 
     Returns the event stream from `graph.stream(...)`. Caller is responsible for
     inspecting `__interrupt__` events and resuming via `resume(...)`.
+
+    `start` and `resume` share the same graph instance (via `_get_shared_graph`)
+    so that checkpointed state is visible across both calls.
     """
-    graph = graph or build_graph()
+    g = graph or _get_shared_graph()
     wf = workflow_id or new_workflow_id()
     config = {"configurable": {"thread_id": wf}}
-    return graph.stream({"task": task, "workflow_id": wf}, config=config)
+    return g.stream({"task": task, "workflow_id": wf}, config=config)
 
 
 def resume(workflow_id: str, decision: Any, *, graph=None) -> Iterable[Dict[str, Any]]:
-    graph = graph or build_graph()
+    g = graph or _get_shared_graph()
     config = {"configurable": {"thread_id": workflow_id}}
-    return graph.stream(Command(resume=decision), config=config)
+    return g.stream(Command(resume=decision), config=config)

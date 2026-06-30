@@ -111,9 +111,10 @@ def test_budget_blocked_routes_to_checkpoint(monkeypatch):
     assert route(state_clean) == "do_plan"
     assert route(state_blocked) == "checkpoint_budget"
 
-    # After checkpoint: approved=True with raise → resume to blocked.next
+    # After checkpoint: approved=True → resume to budget_resume_node (set by
+    # review_budget_checkpoint before it clears budget_blocked).
     assert _after_budget({"approved": True,
-                          "budget_blocked": {"next": "do_plan"}}) == "do_plan"
+                          "budget_resume_node": "do_plan"}) == "do_plan"
     # Abort: approved=False → END
     from langgraph.graph import END
     assert _after_budget({"approved": False}) == END

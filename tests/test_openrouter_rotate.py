@@ -93,7 +93,7 @@ def test_rotate_skips_429_and_returns_first_2xx(monkeypatch):
                 }
             )
         return _FakeResp({}, status=502)
-    monkeypatch.setattr(orc_mod.requests, "post", fake_post)
+    monkeypatch.setattr(orc_mod.http_retry, "post", fake_post)
 
     client = orc_mod.OpenRouterClient(api_key="sk-test")
     res = client.chat([{"role": "user", "content": "x"}], model="free-rotate")
@@ -129,7 +129,7 @@ def test_rotate_starts_from_last_used(monkeypatch):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
             }
         )
-    monkeypatch.setattr(orc_mod.requests, "post", fake_post)
+    monkeypatch.setattr(orc_mod.http_retry, "post", fake_post)
 
     client = orc_mod.OpenRouterClient(api_key="sk-test")
     client.chat([{"role": "user", "content": "x"}], model="free-rotate")
@@ -145,7 +145,7 @@ def test_rotate_all_fail_raises(monkeypatch):
             ("b:free", "text->text"),
         ])),
     )
-    monkeypatch.setattr(orc_mod.requests, "post", lambda *a, **k: _FakeResp({}, status=429))
+    monkeypatch.setattr(orc_mod.http_retry, "post", lambda *a, **k: _FakeResp({}, status=429))
     client = orc_mod.OpenRouterClient(api_key="sk-test")
     with pytest.raises(RuntimeError, match="rate-limited"):
         client.chat([{"role": "user", "content": "x"}], model="free-rotate")
@@ -158,7 +158,7 @@ def test_rotate_non_rate_limit_error_raised_immediately(monkeypatch):
         "get",
         lambda *a, **k: _FakeResp(_fake_models_response([("a:free", "text->text")])),
     )
-    monkeypatch.setattr(orc_mod.requests, "post", lambda *a, **k: _FakeResp({"error": "bad key"}, status=401))
+    monkeypatch.setattr(orc_mod.http_retry, "post", lambda *a, **k: _FakeResp({"error": "bad key"}, status=401))
     client = orc_mod.OpenRouterClient(api_key="sk-test")
     with pytest.raises(requests.HTTPError):
         client.chat([{"role": "user", "content": "x"}], model="free-rotate")
@@ -178,7 +178,7 @@ def test_non_rotate_model_bypasses_rotation(monkeypatch):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
             }
         )
-    monkeypatch.setattr(orc_mod.requests, "post", fake_post)
+    monkeypatch.setattr(orc_mod.http_retry, "post", fake_post)
 
     client = orc_mod.OpenRouterClient(api_key="sk-test")
     res = client.chat([{"role": "user", "content": "x"}], model="meta-llama/llama-3.3-70b-instruct:free")

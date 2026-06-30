@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -48,6 +49,9 @@ class _ActiveWorkflow:
     last_pending: Optional[dict] = None  # interrupt payload waiting for human
 
 
+_MAX_WORKFLOW_THREADS = int(os.getenv("SLACK_MAX_WORKFLOW_THREADS", "20"))
+
+
 class WorkflowDispatcher:
     """Maps workflow_id → (channel, thread, user) and drives graph.stream calls."""
 
@@ -57,6 +61,8 @@ class WorkflowDispatcher:
         self._graph = build_graph()
         self._wf: Dict[str, _ActiveWorkflow] = {}
         self._lock = threading.Lock()
+        self._pool = ThreadPoolExecutor(max_workers=_MAX_WORKFLOW_THREADS,
+                                        thread_name_prefix="slack-wf")
 
     def _config(self, wid: str) -> dict:
         return {"configurable": {"thread_id": wid}}
@@ -65,7 +71,7 @@ class WorkflowDispatcher:
         wid = new_workflow_id()
         with self._lock:
             self._wf[wid] = _ActiveWorkflow(workflow_id=wid, channel=channel, thread_ts=thread_ts, user=user)
-        threading.Thread(target=self._run_until_interrupt, args=(wid, {"task": task, "workflow_id": wid}), daemon=True).start()
+        self._pool.submit(self._run_until_interrupt, wid, {"task": task, "workflow_id": wid})
         return wid
 
     def resume(self, *, workflow_id: str, decision: dict) -> None:
@@ -73,10 +79,14 @@ class WorkflowDispatcher:
             if workflow_id not in self._wf:
                 logger.warning("slack: resume requested for unknown workflow %s", workflow_id)
                 return
-        threading.Thread(target=self._run_until_interrupt, args=(workflow_id, Command(resume=decision)), daemon=True).start()
+        self._pool.submit(self._run_until_interrupt, workflow_id, Command(resume=decision))
 
     def _run_until_interrupt(self, wid: str, payload: Any) -> None:
-        wf = self._wf[wid]
+        with self._lock:
+            wf = self._wf.get(wid)
+        if wf is None:
+            logger.warning("slack: _run_until_interrupt called for unknown wid %s", wid)
+            return
         try:
             interrupted = None
             for ev in self._graph.stream(payload, config=self._config(wid)):
@@ -197,15 +207,46 @@ def build_app():
         app.client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=f"workflow_id: `{wid}`")
         task_queue.push(task, priority=0, workflow_id=wid, metadata={"source": "slack", "user": user, "channel": channel})
 
+    def _check_approver(body) -> Optional[str]:
+        """Return None if allowed, or an error message if not."""
+        if not allowed_approvers:
+            return None
+        clicker = (body.get("user") or {}).get("id", "")
+        if clicker in allowed_approvers:
+            return None
+        return clicker
+
     @app.action("ai_company.approve")
     def handle_approve(ack, body, action):
         ack()
+        clicker = _check_approver(body)
+        if clicker is not None:
+            chan = (body.get("channel") or {}).get("id", "")
+            try:
+                app.client.chat_postEphemeral(
+                    channel=chan, user=(body.get("user") or {}).get("id", ""),
+                    text="⛔ Not on the approver allowlist (SLACK_ALLOWED_APPROVERS).",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("postEphemeral failed: %s", e)
+            return
         wid = action["value"]
         dispatcher.resume(workflow_id=wid, decision={"approved": True})
 
     @app.action("ai_company.reject")
     def handle_reject(ack, body, action):
         ack()
+        clicker = _check_approver(body)
+        if clicker is not None:
+            chan = (body.get("channel") or {}).get("id", "")
+            try:
+                app.client.chat_postEphemeral(
+                    channel=chan, user=(body.get("user") or {}).get("id", ""),
+                    text="⛔ Not on the approver allowlist (SLACK_ALLOWED_APPROVERS).",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("postEphemeral failed: %s", e)
+            return
         wid = action["value"]
         dispatcher.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by <@{body['user']['id']}>"})
 

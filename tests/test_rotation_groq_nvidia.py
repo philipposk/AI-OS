@@ -75,7 +75,7 @@ def test_groq_rotate_on_429(monkeypatch):
         return _FakeResp(
             {"choices": [{"message": {"content": "ok"}}], "model": json["model"], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
         )
-    monkeypatch.setattr(gqc_mod.requests, "post", fake_post)
+    monkeypatch.setattr(gqc_mod.http_retry, "post", fake_post)
 
     client = gqc_mod.GroqClient(api_key="gsk-test")
     res = client.chat([{"role": "user", "content": "x"}], model="free-rotate")
@@ -86,7 +86,7 @@ def test_groq_rotate_on_429(monkeypatch):
 def test_groq_non_sentinel_bypasses_rotation(monkeypatch):
     monkeypatch.setattr(gqf.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("rotation path used")))
     monkeypatch.setattr(
-        gqc_mod.requests,
+        gqc_mod.http_retry,
         "post",
         lambda *a, **k: _FakeResp({"choices": [{"message": {"content": "direct"}}], "model": k["json"]["model"], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
     )
@@ -147,7 +147,7 @@ def test_nvidia_rotate_skips_429(monkeypatch):
         return _FakeResp(
             {"choices": [{"message": {"content": "v"}}], "model": json["model"], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
         )
-    monkeypatch.setattr(nvc_mod.requests, "post", fake_post)
+    monkeypatch.setattr(nvc_mod.http_retry, "post", fake_post)
 
     client = nvc_mod.NvidiaClient(api_key="nv-test")
     res = client.chat([{"role": "user", "content": "x"}], model="free-rotate")

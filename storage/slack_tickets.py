@@ -82,7 +82,7 @@ def _vacuum_old(conn) -> None:
 
 
 def _sig(channel: str, ts: str, text: str) -> str:
-    h = hashlib.sha1()
+    h = hashlib.sha256()
     h.update(channel.encode())
     h.update(b"\x1f")
     h.update(ts.encode())

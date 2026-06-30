@@ -45,7 +45,7 @@ def test_openrouter_round_trip(monkeypatch):
 
     captured: dict = {}
     monkeypatch.setattr(
-        mod.requests,
+        mod.http_retry,
         "post",
         _make_post_capture(
             {
@@ -81,7 +81,7 @@ def test_nvidia_round_trip(monkeypatch):
 
     captured: dict = {}
     monkeypatch.setattr(
-        mod.requests,
+        mod.http_retry,
         "post",
         _make_post_capture(
             {
@@ -104,7 +104,7 @@ def test_groq_round_trip(monkeypatch):
 
     captured: dict = {}
     monkeypatch.setattr(
-        mod.requests,
+        mod.http_retry,
         "post",
         _make_post_capture(
             {
@@ -129,7 +129,7 @@ def test_ollama_round_trip(monkeypatch):
 
     captured: dict = {}
     monkeypatch.setattr(
-        mod.requests,
+        mod.http_retry,
         "post",
         _make_post_capture(
             {
@@ -157,7 +157,7 @@ def test_ollama_unavailable_when_endpoint_down(monkeypatch):
 
     def boom(*a, **k):
         raise real_requests.exceptions.ConnectionError("no route to ollama")
-    monkeypatch.setattr(mod.requests, "post", boom)
+    monkeypatch.setattr(mod.http_retry, "post", boom)
     client = mod.OllamaClient(base_url="http://10.255.255.1:11434")
     with pytest.raises(ProviderUnavailable):
         client.chat([{"role": "user", "content": "x"}], model="llama3.2:3b")

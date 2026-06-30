@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
@@ -42,6 +43,9 @@ class _Active:
     workflow_id: str
     chat_id: int
     user: str
+
+
+_MAX_WORKFLOW_THREADS = int(os.getenv("TELEGRAM_MAX_WORKFLOW_THREADS", "20"))
 
 
 class TelegramDispatcher:
@@ -64,6 +68,8 @@ class TelegramDispatcher:
         self._graph = build_graph()
         self._wf: Dict[str, _Active] = {}
         self._lock = threading.Lock()
+        self._pool = ThreadPoolExecutor(max_workers=_MAX_WORKFLOW_THREADS,
+                                        thread_name_prefix="tg-wf")
 
     def _config(self, wid: str) -> dict:
         return {"configurable": {"thread_id": wid}}
@@ -72,7 +78,7 @@ class TelegramDispatcher:
         wid = new_workflow_id()
         with self._lock:
             self._wf[wid] = _Active(workflow_id=wid, chat_id=chat_id, user=user)
-        threading.Thread(target=self._run_until_interrupt, args=(wid, {"task": task, "workflow_id": wid}), daemon=True).start()
+        self._pool.submit(self._run_until_interrupt, wid, {"task": task, "workflow_id": wid})
         return wid
 
     def resume(self, *, workflow_id: str, decision: dict) -> None:
@@ -80,7 +86,7 @@ class TelegramDispatcher:
             if workflow_id not in self._wf:
                 logger.warning("telegram: resume requested for unknown workflow %s", workflow_id)
                 return
-        threading.Thread(target=self._run_until_interrupt, args=(workflow_id, Command(resume=decision)), daemon=True).start()
+        self._pool.submit(self._run_until_interrupt, workflow_id, Command(resume=decision))
 
     def _post_blocking(self, chat_id: int, text: str, keyboard: Optional[list]) -> None:
         fut = asyncio.run_coroutine_threadsafe(self._post(chat_id, text, keyboard), self._loop)
@@ -90,7 +96,11 @@ class TelegramDispatcher:
             logger.warning("telegram post failed: %s", e)
 
     def _run_until_interrupt(self, wid: str, payload: Any) -> None:
-        wf = self._wf[wid]
+        with self._lock:
+            wf = self._wf.get(wid)
+        if wf is None:
+            logger.warning("telegram: _run_until_interrupt called for unknown wid %s", wid)
+            return
         try:
             interrupted = None
             for ev in self._graph.stream(payload, config=self._config(wid)):
@@ -330,12 +340,22 @@ def build_application():
         if len(data) == 3 and data[1] in ("approve", "reject"):
             _, action, wid = data
             d: TelegramDispatcher = state["dispatcher"]
+            # Owner check: only the user who started the workflow may approve/reject.
+            clicker = cq.from_user.username or str(cq.from_user.id)
+            with d._lock:
+                active = d._wf.get(wid)
+            if active is not None and active.user != clicker:
+                await context.bot.send_message(
+                    chat_id=cq.message.chat_id,
+                    text=f"⛔ Only the workflow owner ({active.user}) may approve or reject.",
+                )
+                return
             if action == "approve":
                 d.resume(workflow_id=wid, decision={"approved": True})
                 await cq.edit_message_reply_markup(reply_markup=None)
                 await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✅ approved `{wid}`", parse_mode="Markdown")
             elif action == "reject":
-                d.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by {cq.from_user.username or cq.from_user.id}"})
+                d.resume(workflow_id=wid, decision={"approved": False, "reason": f"rejected by {clicker}"})
                 await cq.edit_message_reply_markup(reply_markup=None)
                 await context.bot.send_message(chat_id=cq.message.chat_id, text=f"✋ rejected `{wid}`", parse_mode="Markdown")
             return

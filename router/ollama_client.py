@@ -6,6 +6,7 @@ from typing import List
 
 import requests
 
+from . import http_retry
 from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class OllamaClient(BaseProvider):
             },
         }
         try:
-            resp = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=120)
+            resp = http_retry.post(f"{self.base_url}/api/chat", json=payload, timeout=120)
         except requests.exceptions.ConnectionError as e:
             raise ProviderUnavailable(f"Ollama not reachable at {self.base_url}: {e}") from e
         resp.raise_for_status()
@@ -64,7 +65,7 @@ class OllamaClient(BaseProvider):
             "options": {"temperature": temperature, "num_predict": max_tokens},
         }
         try:
-            resp = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=120, stream=True)
+            resp = http_retry.post(f"{self.base_url}/api/chat", json=payload, timeout=120, stream=True)
         except requests.exceptions.ConnectionError as e:
             raise ProviderUnavailable(f"Ollama not reachable at {self.base_url}: {e}") from e
         resp.raise_for_status()

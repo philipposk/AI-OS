@@ -57,7 +57,7 @@ def test_openai_compat_stream_yields_chunks_then_result(monkeypatch, module, cli
     def fake_post(url, headers=None, json=None, timeout=None, stream=False):
         assert json["stream"] is True
         return _StreamingResp(_sse(["Hel", "lo ", "world"], model="m", usage={"prompt_tokens": 3, "completion_tokens": 4}))
-    monkeypatch.setattr(module.requests, "post", fake_post)
+    monkeypatch.setattr(module.http_retry, "post", fake_post)
 
     client = getattr(module, client_cls)(**api_kw)
     items = list(client.chat_stream([{"role": "user", "content": "hi"}], model="m"))
@@ -82,7 +82,7 @@ def test_ollama_stream(monkeypatch):
     ]
     def fake_post(url, json=None, timeout=None, stream=False):
         return _StreamingResp(lines)
-    monkeypatch.setattr(ol_mod.requests, "post", fake_post)
+    monkeypatch.setattr(ol_mod.http_retry, "post", fake_post)
 
     client = ol_mod.OllamaClient(base_url="http://localhost:11434")
     items = list(client.chat_stream([{"role": "user", "content": "x"}], model="llama3.2:3b"))

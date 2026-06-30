@@ -6,6 +6,7 @@ States: pending → in_progress → (done | failed | cancelled).
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -79,29 +80,43 @@ def push(task: str, *, priority: int = 0, workflow_id: Optional[str] = None, met
         return Task.from_row(row)
 
 
+_POP_MAX_RETRIES = 5
+_POP_RETRY_DELAY_S = 0.05
+
+
 def pop() -> Optional[Task]:
-    """Atomically claim the highest-priority pending task. Returns None if empty."""
-    with connect() as conn:
-        _ensure_schema(conn)
-        conn.execute("BEGIN IMMEDIATE")
+    """Atomically claim the highest-priority pending task. Returns None if empty.
+
+    Retries up to _POP_MAX_RETRIES times on OperationalError (e.g. database
+    locked) before propagating the exception.
+    """
+    for attempt in range(_POP_MAX_RETRIES):
         try:
-            row = conn.execute(
-                "SELECT * FROM tasks WHERE status='pending' "
-                "ORDER BY priority DESC, id ASC LIMIT 1"
-            ).fetchone()
-            if row is None:
-                conn.execute("COMMIT")
-                return None
-            conn.execute(
-                "UPDATE tasks SET status='in_progress', started_at=? WHERE id=? AND status='pending'",
-                (_now(), row["id"]),
-            )
-            row = conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
-            conn.execute("COMMIT")
-            return Task.from_row(row)
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+            with connect() as conn:
+                _ensure_schema(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = conn.execute(
+                        "SELECT * FROM tasks WHERE status='pending' "
+                        "ORDER BY priority DESC, id ASC LIMIT 1"
+                    ).fetchone()
+                    if row is None:
+                        conn.execute("COMMIT")
+                        return None
+                    conn.execute(
+                        "UPDATE tasks SET status='in_progress', started_at=? WHERE id=? AND status='pending'",
+                        (_now(), row["id"]),
+                    )
+                    row = conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+                    conn.execute("COMMIT")
+                    return Task.from_row(row)
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
+        except sqlite3.OperationalError:
+            if attempt >= _POP_MAX_RETRIES - 1:
+                raise
+            time.sleep(_POP_RETRY_DELAY_S * (attempt + 1))
 
 
 def mark_done(task_id: int) -> None:

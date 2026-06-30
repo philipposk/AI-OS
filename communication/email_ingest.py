@@ -294,17 +294,23 @@ def poll_once(*, workflow_id: Optional[str] = None) -> int:
 
 
 def run_poll_loop(*, workflow_id: Optional[str] = None) -> None:  # pragma: no cover
-    """Blocking poll loop. Ctrl-C to stop."""
+    """Blocking poll loop with exponential backoff on consecutive errors. Ctrl-C to stop."""
     interval = _poll_interval()
     logger.info("email ingest starting; polling %s every %ds", _imap_folder(), interval)
+    consecutive_failures = 0
+    max_backoff = min(interval * 8, 3600)
     while True:
         try:
             n = poll_once(workflow_id=workflow_id)
             if n:
                 logger.info("surfaced %d ticket(s) from email", n)
+            consecutive_failures = 0
+            time.sleep(interval)
         except Exception as e:  # noqa: BLE001
-            logger.warning("email poll failed: %s", e)
-        time.sleep(interval)
+            consecutive_failures += 1
+            backoff = min(interval * (2 ** (consecutive_failures - 1)), max_backoff)
+            logger.warning("email poll failed (%d consecutive): %s; backing off %ds", consecutive_failures, e, backoff)
+            time.sleep(backoff)
 
 
 def main() -> int:  # pragma: no cover

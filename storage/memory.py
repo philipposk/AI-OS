@@ -26,6 +26,9 @@ from .embeddings import cosine, get_embedder
 
 logger = logging.getLogger(__name__)
 
+_schema_created_for: Optional[str] = None  # tracks which DB path schema was created for
+_schema_lock = __import__("threading").Lock()
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_docs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,13 +87,20 @@ class MemoryDoc:
 
 
 def _ensure(conn) -> None:
-    conn.executescript(_SCHEMA)
-    # Schema migration: pre-Phase-J databases lack the embedding columns.
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(memory_docs)").fetchall()}
-    if "embedding" not in cols:
-        conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding BLOB")
-    if "embedding_model" not in cols:
-        conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding_model TEXT")
+    global _schema_created_for
+    import os as _os
+    current_db = _os.getenv("AI_COMPANY_DB", "")
+    if _schema_created_for != current_db:
+        with _schema_lock:
+            if _schema_created_for != current_db:
+                conn.executescript(_SCHEMA)
+                # Schema migration: pre-Phase-J databases lack the embedding columns.
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(memory_docs)").fetchall()}
+                if "embedding" not in cols:
+                    conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding BLOB")
+                if "embedding_model" not in cols:
+                    conn.execute("ALTER TABLE memory_docs ADD COLUMN embedding_model TEXT")
+                _schema_created_for = current_db
 
 
 def _now() -> str:

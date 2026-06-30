@@ -50,8 +50,9 @@ def commit_changes(
     cwd: str | Path | None = None,
 ) -> str:
     """Stage `paths` (or all changes if None) and create one commit. Returns SHA."""
-    if paths:
-        _git("add", "--", *paths, cwd=cwd)
+    path_list = list(paths) if paths is not None else []
+    if path_list:
+        _git("add", "--", *path_list, cwd=cwd)
     else:
         _git("add", "-A", cwd=cwd)
     res = _git("commit", "-m", message, cwd=cwd, check=False)

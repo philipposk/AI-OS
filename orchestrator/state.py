@@ -60,6 +60,9 @@ class GraphState(TypedDict, total=False):
     # graph routes any state with a truthy `budget_blocked` to
     # `checkpoint_budget`. Cleared by the checkpoint on approval/abort.
     budget_blocked: Optional[dict]   # {"scope", "current", "limit", "next"}
+    # Preserved by review_budget_checkpoint before clearing budget_blocked so
+    # _after_budget can still read the resume target after the dict is None'd.
+    budget_resume_node: Optional[str]
     # Per-workflow override of $WORKFLOW_BUDGET_USD, raised by the human
     # when they approve "raise ceiling" at the budget checkpoint.
     budget_ceiling_usd: Optional[float]

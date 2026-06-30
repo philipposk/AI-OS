@@ -307,3 +307,15 @@ class ModelRouter:
                 workflow_id=workflow_id,
             )
             yield final
+        else:
+            # Provider completed the stream but returned no ChatResult (e.g. a
+            # streaming provider that yields only text fragments). Record the
+            # call with zero tokens so accounting is never silently skipped.
+            record_call(
+                provider=provider_name,
+                model=resolved_model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                task_type=task_type,
+                workflow_id=workflow_id,
+            )

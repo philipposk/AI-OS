@@ -336,9 +336,17 @@ def code_node(state: GraphState) -> Dict[str, Any]:
 
 
 def test_node(state: GraphState) -> Dict[str, Any]:
+    # SECURITY: pytest runs in the current working directory, which is the
+    # project root. Workflows that touch files outside a controlled sandbox
+    # risk executing arbitrary test code. Restrict via WORKFLOW_TEST_CWD env
+    # or by sandboxing the container. Timeout is bounded by the env var
+    # WORKFLOW_TEST_TIMEOUT_S (default 300s).
+    import os as _os
+    _cwd = _os.getenv("WORKFLOW_TEST_CWD") or None
+    _timeout = int(_os.getenv("WORKFLOW_TEST_TIMEOUT_S", "300"))
     cmd = ["python", "-m", "pytest", "-x", "--tb=short", "-q"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=_timeout, cwd=_cwd)
     except subprocess.TimeoutExpired:
         return {"test_results": TestResult(returncode=124, stdout="", stderr="timeout", passed=False)}
     except FileNotFoundError:
@@ -442,7 +450,12 @@ def commit_node(state: GraphState) -> Dict[str, Any]:
     from tools.git_ops import commit_changes  # provided in Phase D
 
     msg = state.get("commit_message") or _build_commit_message(state)
-    sha = commit_changes(message=msg, paths=[c["path"] for c in state.get("code_changes", []) if c.get("path")])
+    paths = [c["path"] for c in state.get("code_changes", []) if c.get("path")] or None
+    try:
+        sha = commit_changes(message=msg, paths=paths)
+    except Exception as exc:
+        logger.error("commit_node failed: %s", exc, exc_info=True)
+        return {"error": str(exc), "commit_sha": None, "commit_message": msg}
     return {"commit_sha": sha, "commit_message": msg}
 
 

@@ -12,7 +12,7 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
+      - app-data:/app/data
     depends_on:
       - ollama
 
@@ -22,10 +22,12 @@ services:
     container_name: ai-company-ollama
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      # Bind to 127.0.0.1 so Ollama is not exposed to the host network.
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama:/root/.ollama
     # GPU? Add deploy.resources.reservations.devices for NVIDIA + nvidia-container-toolkit.
 
 volumes:
   ollama:
+  app-data:

@@ -8,8 +8,9 @@ anything is committed.
 Free by default: rotates across OpenRouter / Groq / NVIDIA NIM free tiers
 plus Ollama local; only falls back to Anthropic if you set
 `ANTHROPIC_API_KEY`. Per-call cost is recorded in SQLite; budget guards
-and a per-provider circuit breaker prevent runaway spend. **318/318
-tests pass; no live LLM calls in CI.**
+and a per-provider circuit breaker prevent runaway spend. **331 tests
+collected; optional extras (streamlit, Pillow, json_repair, edge-tts) skip
+when not installed. Zero live LLM calls in CI.**
 
 > **New here / non-technical reader?** Start with
 > [docs/explainer.md](docs/explainer.md) — plain-English tour of what
@@ -54,7 +55,7 @@ User ──► CLI │ Streamlit dashboard │ Minimal SPA │ Slack bot │ Tel
 ## Quick start (local Mac)
 
 ```bash
-cd ai_company
+cd AI-OS
 ./infrastructure/deploy.sh    # creates .venv + installs deps + .env from .env.example
 source .venv/bin/activate
 $EDITOR .env                  # add at least ONE provider key (see Providers below)
@@ -151,9 +152,11 @@ API_HOST=0.0.0.0 API_PORT=8765 \
 | GET  | `/v1/models`                     | Virtual + real model list |
 | GET  | `/v1/accounting?workflow_id=…`   | Token + cost report |
 | POST | `/v1/chat/completions`           | OpenAI-compatible (`stream:true` → SSE) |
-| POST | `/v1/workflows/start`            | Kick off a LangGraph workflow; returns `{workflow_id, ...}` |
-| POST | `/v1/workflows/{wid}/resume`     | Resume after a checkpoint (`{approved: true|false, reason?, raise_to?}`) |
-| GET  | `/v1/workflows/{wid}`            | Workflow status + latest interrupt payload |
+| POST   | `/v1/workflows/start`            | Kick off a LangGraph workflow; returns `{workflow_id, ...}` |
+| POST   | `/v1/workflows/{wid}/resume`     | Resume after a checkpoint (`{approved: true|false, reason?, raise_to?}`) |
+| GET    | `/v1/workflows`                  | List all active workflows (LRU-capped, set `API_WORKFLOW_CACHE_MAX`) |
+| GET    | `/v1/workflows/{wid}`            | Workflow status + latest interrupt payload |
+| DELETE | `/v1/workflows/{wid}`            | Evict a workflow from cache |
 
 The `model` field on `/v1/chat/completions` accepts:
 - a task type: `analyze | plan | code | review | summarize | simple`
@@ -181,6 +184,52 @@ backend contract it must keep talking to:
 Streamlit dashboard (`ui/dashboard.py`) is the **reference UX**: chat
 panel, narration toggle, voice mic, git panel with one-click revert,
 queue tab, memory search tab, model picker sidebar, accounting tab.
+
+## Page Assistant widget
+
+The SPA (`frontend/index.html`) embeds the [page-assistant](https://github.com/philipposk/page-assistant) floating widget (v0.2) — a grounded, voice-capable in-app helper that calls real AI-OS capabilities.
+
+### How it works
+
+1. The bundle (`frontend/page-assistant.global.js`) is built from `packages/widget` in the page-assistant monorepo and copied here.
+2. The widget's grounding loop calls **`POST /v1/llm/complete`** (same origin) — API keys never leave the server.
+3. Auth: the widget reads the `aios_token` cookie and passes it as `Authorization: Bearer <token>` on every round-trip. Set `API_COMPANY_TOKEN` on the server to require it.
+
+### Updating the bundle
+
+```bash
+cd /path/to/page-assistant
+git pull origin main
+npm install
+npm run build
+cp packages/widget/dist/page-assistant.global.js /path/to/AI-OS/frontend/page-assistant.global.js
+```
+
+### Env vars for the widget bridge
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `API_COMPANY_TOKEN` | Bearer token for all AI-OS API endpoints (including `/v1/llm/complete`). Leave unset to deny all or set to `""` for open access. | (deny) |
+| `PA_LLM_BASE_URL` | Override LLM base URL for the widget bridge | auto-detect |
+| `PA_LLM_API_KEY` | Override API key for the widget bridge | auto-detect |
+| `PA_LLM_MODEL` | Override model for the widget bridge | provider default |
+
+Provider auto-detection order: `PA_LLM_*` → `OPENROUTER_API_KEY` → `GROQ_API_KEY` → `OPENAI_API_KEY`.
+
+### Built-in capabilities
+
+| Capability | Description |
+|---|---|
+| `check_health` | Checks backend liveness + available providers |
+| `list_workflows` | Lists active workflows in the current session (requires `aios_token` cookie) |
+
+### New in v0.2 (upstream changes merged 2026-06-30)
+
+- **Voice settings UI** — gear icon opens a built-in voice picker (ElevenLabs / OpenAI / browser TTS, Whisper / browser STT). No custom UI needed.
+- **Read-aloud** — `autoSpeak: true` makes the widget read replies aloud; user-controlled via voice settings.
+- **`authToken` in init** — bearer token is now sent on every LLM proxy round-trip (not just capability calls), fixing auth on protected servers.
+- **Phone launcher** — `open_page_link` can now launch `tel:` URIs (with confirm gate).
+- **Agent discovery docs** — `AGENTS.md`, `INTEGRATION.md`, `SECURITY.md` added to upstream repo.
 
 ## Voice
 
@@ -445,7 +494,7 @@ ai_company/
 │   ├── common/                     # shared cloud-init + systemd unit
 │   ├── modules/
 │   └── {oracle,aws,gcp,azure,hetzner,digitalocean}/
-├── tests/                          # 48 test files, 318 tests, no live LLM calls
+├── tests/                          # 48 test files, 328 tests (308 pass; 18 skip on optional deps)
 ├── docs/
 │   ├── glass-setup.md
 │   ├── obsidian.md
@@ -461,7 +510,7 @@ ai_company/
 ## Testing
 
 ```bash
-pytest -q                                 # 318 tests
+pytest -q                                 # 328 tests; 308 pass (18 need optional deps)
 pytest tests/test_graph.py -v             # orchestrator integration with stubs
 pytest tests/test_providers.py -v         # per-provider request/response shape
 pytest tests/test_api_server.py -v        # FastAPI shim + /v1/workflows

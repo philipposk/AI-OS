@@ -56,14 +56,14 @@ def stub_router(monkeypatch, tmp_path):
 
 @pytest.fixture
 def fake_tests_pass(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, cwd=None):
         return subprocess.CompletedProcess(cmd, 0, stdout="9 passed", stderr="")
     monkeypatch.setattr(nodes_mod.subprocess, "run", fake_run)
 
 
 @pytest.fixture
 def fake_tests_fail(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, cwd=None):
         return subprocess.CompletedProcess(cmd, 1, stdout="1 failed", stderr="AssertionError")
     monkeypatch.setattr(nodes_mod.subprocess, "run", fake_run)
 

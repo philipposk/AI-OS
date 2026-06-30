@@ -4,8 +4,7 @@ import logging
 import os
 from typing import List
 
-import requests
-
+from . import http_retry
 from .base import BaseProvider, ChatResult, Message, ProviderUnavailable
 from .rotation import ROTATE_SENTINELS
 
@@ -44,7 +43,7 @@ class GroqClient(BaseProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        resp = requests.post(self.BASE_URL, headers=headers, json=payload, timeout=60)
+        resp = http_retry.post(self.BASE_URL, headers=headers, json=payload, timeout=60)
         resp.raise_for_status()
         body = resp.json()
         choices = body.get("choices") or []
@@ -81,7 +80,7 @@ class GroqClient(BaseProvider):
             model = models[0].id
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": True}
-        resp = requests.post(self.BASE_URL, headers=headers, json=payload, timeout=120, stream=True)
+        resp = http_retry.post(self.BASE_URL, headers=headers, json=payload, timeout=120, stream=True)
         resp.raise_for_status()
         from ._sse import parse_openai_sse
         text_parts: list[str] = []

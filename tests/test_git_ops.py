@@ -235,3 +235,69 @@ def test_git_revert_raises_on_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="merge conflict"):
         git_revert("oldsha")
+
+
+# ---------- commit_changes empty-paths guard ----------
+
+
+def test_commit_changes_uses_git_add_all_when_paths_none(monkeypatch):
+    """commit_changes(paths=None) must run 'git add -A', not 'git add -- '."""
+    captured: list[tuple] = []
+
+    def fake_git(*args, **kwargs):
+        captured.append(args)
+        if args[0] == "commit":
+            return _cp()
+        if args[0] == "rev-parse":
+            return _cp(stdout="deadbeef\n")
+        return _cp()
+
+    monkeypatch.setattr("tools.git_ops._git", fake_git)
+    from tools.git_ops import commit_changes
+
+    commit_changes("msg", paths=None)
+    add_calls = [c for c in captured if c[0] == "add"]
+    assert len(add_calls) == 1
+    assert add_calls[0] == ("add", "-A"), f"Expected git add -A, got {add_calls[0]}"
+
+
+def test_commit_changes_uses_specific_paths_when_given(monkeypatch):
+    """commit_changes(paths=['a.py']) must run 'git add -- a.py'."""
+    captured: list[tuple] = []
+
+    def fake_git(*args, **kwargs):
+        captured.append(args)
+        if args[0] == "commit":
+            return _cp()
+        if args[0] == "rev-parse":
+            return _cp(stdout="cafebabe\n")
+        return _cp()
+
+    monkeypatch.setattr("tools.git_ops._git", fake_git)
+    from tools.git_ops import commit_changes
+
+    commit_changes("msg", paths=["a.py", "b.py"])
+    add_calls = [c for c in captured if c[0] == "add"]
+    assert len(add_calls) == 1
+    assert add_calls[0] == ("add", "--", "a.py", "b.py")
+
+
+def test_commit_changes_uses_git_add_all_when_paths_empty_list(monkeypatch):
+    """commit_changes(paths=[]) must run 'git add -A', not 'git add -- '."""
+    captured: list[tuple] = []
+
+    def fake_git(*args, **kwargs):
+        captured.append(args)
+        if args[0] == "commit":
+            return _cp()
+        if args[0] == "rev-parse":
+            return _cp(stdout="00000001\n")
+        return _cp()
+
+    monkeypatch.setattr("tools.git_ops._git", fake_git)
+    from tools.git_ops import commit_changes
+
+    commit_changes("msg", paths=[])
+    add_calls = [c for c in captured if c[0] == "add"]
+    assert len(add_calls) == 1
+    assert add_calls[0] == ("add", "-A"), f"Expected git add -A for empty list, got {add_calls[0]}"
